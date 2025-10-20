@@ -458,16 +458,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
         control={chatkit.control}
         className="block h-full w-full"
       />
-      <ErrorOverlay
-        error={blockingError}
-        fallbackMessage={
-          blockingError || !isInitializingSession
-            ? null
-            : "Loading assistant session..."
-        }
-        onRetry={blockingError && errors.retryable ? handleResetChat : null}
-        retryLabel="Restart chat"
-      />
+      {/* Error overlay disabled to keep widget visible */}
     </div>
   );
 });
