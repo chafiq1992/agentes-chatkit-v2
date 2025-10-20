@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react";
 import { ChatKit, useChatKit } from "@openai/chatkit-react";
 import {
   STARTER_PROMPTS,
@@ -19,11 +19,16 @@ export type FactAction = {
   factText: string;
 };
 
-type ChatKitPanelProps = {
+export type ChatKitPanelProps = {
   theme: ColorScheme;
   onWidgetAction: (action: FactAction) => Promise<void>;
   onResponseEnd: () => void;
   onThemeRequest: (scheme: ColorScheme) => void;
+  onResponseJSON?: (payload: { outputs: unknown[]; full: unknown }) => void;
+};
+
+export type ChatKitPanelHandle = {
+  getLastResults: () => { outputs: unknown[]; full: unknown } | null;
 };
 
 type ErrorState = {
@@ -43,12 +48,16 @@ const createInitialErrors = (): ErrorState => ({
   retryable: false,
 });
 
-export function ChatKitPanel({
-  theme,
-  onWidgetAction,
-  onResponseEnd,
-  onThemeRequest,
-}: ChatKitPanelProps) {
+export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(function ChatKitPanel(
+  {
+    theme,
+    onWidgetAction,
+    onResponseEnd,
+    onThemeRequest,
+    onResponseJSON,
+  }: ChatKitPanelProps,
+  ref
+) {
   const processedFacts = useRef(new Set<string>());
   const [errors, setErrors] = useState<ErrorState>(() => createInitialErrors());
   const [isInitializingSession, setIsInitializingSession] = useState(true);
@@ -61,6 +70,11 @@ export function ChatKitPanel({
       : "pending"
   );
   const [widgetInstanceKey, setWidgetInstanceKey] = useState(0);
+  const collectingLogsRef = useRef(false);
+  const responseLogsRef = useRef<unknown[]>([]);
+  const jsonCandidatesRef = useRef<unknown[]>([]);
+  const lastCapturedOutputsRef = useRef<unknown[]>([]);
+  const lastCapturedFullRef = useRef<unknown>(null);
 
   const setErrorState = useCallback((updates: Partial<ErrorState>) => {
     setErrors((current) => ({ ...current, ...updates }));
@@ -314,14 +328,96 @@ export function ChatKitPanel({
 
       return { success: false };
     },
-    onResponseEnd: () => {
-      onResponseEnd();
-    },
     onResponseStart: () => {
       setErrorState({ integration: null, retryable: false });
+      collectingLogsRef.current = true;
+      responseLogsRef.current = [];
+      jsonCandidatesRef.current = [];
+    },
+    onResponseEnd: () => {
+      onResponseEnd();
+      collectingLogsRef.current = false;
+      const payload = responseLogsRef.current;
+      responseLogsRef.current = [];
+      const jsonOutputs = jsonCandidatesRef.current;
+      jsonCandidatesRef.current = [];
+      const outputsOnly = Array.isArray(jsonOutputs)
+        ? jsonOutputs.filter((o) => o && typeof o === "object" && !Array.isArray(o))
+        : [];
+      const toEmit = { outputs: outputsOnly, full: payload };
+      // persist to allow manual fetch via imperative handle
+      lastCapturedOutputsRef.current = outputsOnly;
+      lastCapturedFullRef.current = payload;
+      try {
+        (onResponseJSON ?? (() => {}))(toEmit);
+      } catch {
+        // ignore errors from consumer code
+      }
     },
     onThreadChange: () => {
       processedFacts.current.clear();
+    },
+    onLog: (detail: { name: string; data?: Record<string, unknown> }) => {
+      // Collect all diagnostic logs during a single assistant response
+      if (!collectingLogsRef.current) return;
+      try {
+        const entry = { name: detail?.name, data: detail?.data } as Record<string, unknown>;
+        responseLogsRef.current.push(entry);
+
+        // Heuristically extract structured JSON objects from the log payloads
+        const maybeObjects: unknown[] = [];
+
+        const pushIfObject = (v: unknown) => {
+          if (v && typeof v === "object" && !Array.isArray(v)) {
+            maybeObjects.push(v);
+          }
+        };
+
+        // Direct object forms commonly used: data.output, data.output_json, data.result, data.payload
+        const data = (entry.data ?? {}) as Record<string, unknown>;
+        pushIfObject((data as { output?: unknown }).output);
+        pushIfObject((data as { output_json?: unknown }).output_json);
+        pushIfObject((data as { result?: unknown }).result);
+        pushIfObject((data as { payload?: unknown }).payload);
+
+        // Scan string fields for embedded JSON
+        const scanStringsForJson = (val: unknown) => {
+          if (typeof val === "string") {
+            const t = val.trim();
+            if (t.startsWith("{") && t.endsWith("}")) {
+              try {
+                const parsed = JSON.parse(t);
+                pushIfObject(parsed);
+              } catch {}
+            }
+          } else if (val && typeof val === "object") {
+            for (const v of Object.values(val as Record<string, unknown>)) {
+              scanStringsForJson(v);
+            }
+          }
+        };
+        scanStringsForJson(data);
+
+        if (maybeObjects.length > 0) {
+          // Deduplicate by JSON string
+          const seen = new Set(jsonCandidatesRef.current.map((o) => {
+            try { return JSON.stringify(o); } catch { return null; }
+          }).filter(Boolean) as string[]);
+          for (const obj of maybeObjects) {
+            try {
+              const key = JSON.stringify(obj);
+              if (!seen.has(key)) {
+                jsonCandidatesRef.current.push(obj);
+                seen.add(key);
+              }
+            } catch {
+              // ignore non-serializable
+            }
+          }
+        }
+      } catch {
+        // ignore malformed diagnostics
+      }
     },
     onError: ({ error }: { error: unknown }) => {
       // Note that Chatkit UI handles errors for your users.
@@ -329,6 +425,19 @@ export function ChatKitPanel({
       console.error("ChatKit error", error);
     },
   });
+
+  useImperativeHandle(ref, () => ({
+    getLastResults: () => {
+      const outputs = Array.isArray(lastCapturedOutputsRef.current)
+        ? lastCapturedOutputsRef.current
+        : [];
+      const full = lastCapturedFullRef.current;
+      if (!outputs.length && (full == null || (Array.isArray(full) && full.length === 0))) {
+        return null;
+      }
+      return { outputs, full };
+    },
+  }));
 
   const activeError = errors.session ?? errors.integration;
   const blockingError = errors.script ?? activeError;
@@ -366,7 +475,7 @@ export function ChatKitPanel({
       />
     </div>
   );
-}
+});
 
 function extractErrorDetail(
   payload: Record<string, unknown> | undefined,

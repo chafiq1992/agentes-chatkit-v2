@@ -1,0 +1,22 @@
+# Dependencies
+node_modules
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Next.js
+.next/cache
+.vercel
+out
+
+# Git
+.git
+.gitignore
+
+# OS/editor files
+.DS_Store
+*.swp
+*.swo
