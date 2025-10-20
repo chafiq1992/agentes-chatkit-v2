@@ -1,11 +1,10 @@
 # Cloud Build config to build and push the container image
-# Requires substitutions _REGION, _SERVICE, _REPO, and _WORKFLOW_ID or set defaults below
+# Requires substitutions _REGION, _SERVICE, _REPO
 
 substitutions:
   _REGION: us-central1
   _SERVICE: chatkit-starter
   _REPO: chatkit-starter
-  _WORKFLOW_ID: ""
 
 steps:
   - name: gcr.io/cloud-builders/docker
@@ -14,8 +13,6 @@ steps:
       - .
       - -t
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/${_SERVICE}:$SHORT_SHA
-      - --build-arg
-      - NEXT_PUBLIC_CHATKIT_WORKFLOW_ID=${_WORKFLOW_ID}
   - name: gcr.io/cloud-builders/docker
     args:
       - push

@@ -11,10 +11,7 @@ RUN npm ci
 # Copy source and build
 COPY . .
 
-# Build-time public env for Next.js client bundle
-ARG NEXT_PUBLIC_CHATKIT_WORKFLOW_ID
-ENV NEXT_PUBLIC_CHATKIT_WORKFLOW_ID=${NEXT_PUBLIC_CHATKIT_WORKFLOW_ID}
-
+# Disable Next telemetry for CI builds
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 

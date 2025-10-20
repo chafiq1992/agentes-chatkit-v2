@@ -1,6 +1,4 @@
-import { WORKFLOW_ID } from "@/lib/config";
-
-export const runtime = "edge";
+export const runtime = "nodejs";
 
 interface CreateSessionRequestBody {
   workflow?: { id?: string | null } | null;
@@ -37,11 +35,12 @@ export async function POST(request: Request): Promise<Response> {
     }
 
     const parsedBody = await safeParseJson<CreateSessionRequestBody>(request);
-    const { userId, sessionCookie: resolvedSessionCookie } =
-      await resolveUserId(request);
+    const { userId, sessionCookie: resolvedSessionCookie } = await resolveUserId(request);
     sessionCookie = resolvedSessionCookie;
     const resolvedWorkflowId =
-      parsedBody?.workflow?.id ?? parsedBody?.workflowId ?? WORKFLOW_ID;
+      parsedBody?.workflow?.id ??
+      parsedBody?.workflowId ??
+      (process.env.CHATKIT_WORKFLOW_ID?.trim() ?? "");
 
     if (process.env.NODE_ENV !== "production") {
       console.info("[create-session] handling request", {
