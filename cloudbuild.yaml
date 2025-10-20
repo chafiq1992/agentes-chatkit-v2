@@ -1,5 +1,5 @@
 # Cloud Build config to build and push the container image
-# Requires substitutions _REGION, _SERVICE, _REPO, _WORKFLOW_ID 
+# Requires substitutions _REGION, _SERVICE, _REPO, _WORKFLOW_ID  
 
 substitutions:
   _REGION: europe-west1
