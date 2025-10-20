@@ -28,10 +28,10 @@ export default function App() {
 
   return (
     <main className="relative min-h-screen bg-slate-100 dark:bg-slate-950">
-      {/* Reserve left column (25vw). Sidebar slides within its own space */}
+      {/* Reserve left column (25vw). Sidebar stays open */}
       <div className="absolute inset-y-0 left-0 z-20 w-[25vw]">
-        <div className="group h-full">
-          <div className="absolute inset-y-0 left-0 w-[25vw] translate-x-[-80%] group-hover:translate-x-0 transition-transform duration-300 ease-in-out shadow-xl border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+        <div className="h-full">
+          <div className="absolute inset-y-0 left-0 w-[25vw] transition-transform duration-300 ease-in-out shadow-xl border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
             <div className="p-3 text-xs text-slate-500 dark:text-slate-400">Chat</div>
             <div className="px-3 pb-3">
               <ChatKitPanel
