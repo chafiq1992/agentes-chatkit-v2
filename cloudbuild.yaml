@@ -4,7 +4,7 @@
 substitutions:
   _REGION: europe-west1
   _SERVICE: agents-chatkit-v2
-  _REPO: agents-chatkit-v2
+  _REPO: agentes-chatkit-v2
   _WORKFLOW_ID: "wf_68ee77a70ce08190a75e19e9b0a4f27f094b95735d6ec6b3"
   
 steps:
