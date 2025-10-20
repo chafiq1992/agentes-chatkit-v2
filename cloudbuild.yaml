@@ -1,11 +1,11 @@
 # Cloud Build config to build and push the container image
-# Requires substitutions _REGION, _SERVICE, _REPO
+# Requires substitutions _REGION, _SERVICE, _REPO-
 
 substitutions:
   _REGION: agents-chatkit-v2
   _SERVICE: chatkit-starter
   _REPO: agentes-chatkit-v2
-
+  
 steps:
   - name: gcr.io/cloud-builders/docker
     args:
