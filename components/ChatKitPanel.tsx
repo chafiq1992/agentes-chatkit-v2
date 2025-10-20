@@ -77,6 +77,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
   const lastCapturedFullRef = useRef<unknown>(null);
   const textBufferRef = useRef<string[]>([]);
   const lastCapturedTextRef = useRef<string>("");
+  const jsonTextBufferRef = useRef<string[]>([]);
 
   const setErrorState = useCallback((updates: Partial<ErrorState>) => {
     setErrors((current) => ({ ...current, ...updates }));
@@ -336,6 +337,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
       responseLogsRef.current = [];
       jsonCandidatesRef.current = [];
       textBufferRef.current = [];
+      jsonTextBufferRef.current = [];
     },
     onResponseEnd: () => {
       onResponseEnd();
@@ -347,6 +349,16 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
       const outputsOnly = Array.isArray(jsonOutputs)
         ? jsonOutputs.filter((o) => o && typeof o === "object" && !Array.isArray(o))
         : [];
+      // Attempt to parse any accumulated JSON text if present (streamed deltas)
+      const jsonJoined = (jsonTextBufferRef.current.join("") || "").trim();
+      if (jsonJoined) {
+        try {
+          const parsed = JSON.parse(jsonJoined);
+          if (parsed && typeof parsed === "object") {
+            outputsOnly.push(parsed);
+          }
+        } catch {}
+      }
       const textJoined = (textBufferRef.current.join("") || "").trim();
       const toEmit = { outputs: outputsOnly, full: payload, text: textJoined || undefined };
       // persist to allow manual fetch via imperative handle
@@ -393,6 +405,38 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
         };
         pushIfString((data as { text?: unknown }).text);
         pushIfString((data as { content?: unknown }).content);
+
+        // Heuristics for ChatKit streaming deltas
+        const delta = (data as { delta?: unknown }).delta;
+        if (typeof delta === "string" && delta) {
+          textBufferRef.current.push(delta);
+        }
+        const deltaJson = (data as { delta_json?: unknown }).delta_json;
+        if (typeof deltaJson === "string" && deltaJson) {
+          jsonTextBufferRef.current.push(deltaJson);
+        }
+
+        // Some payloads provide a content array with text items
+        const content = (data as { content?: unknown }).content;
+        if (Array.isArray(content)) {
+          for (const item of content) {
+            if (item && typeof item === "object") {
+              const maybeText = (item as Record<string, unknown>).text;
+              if (typeof maybeText === "string" && maybeText.trim()) {
+                textBufferRef.current.push(maybeText);
+              } else if (
+                maybeText &&
+                typeof maybeText === "object" &&
+                typeof (maybeText as { value?: unknown }).value === "string"
+              ) {
+                const val = (maybeText as { value: string }).value;
+                if (val.trim()) {
+                  textBufferRef.current.push(val);
+                }
+              }
+            }
+          }
+        }
 
         // Scan string fields for embedded JSON
         const scanStringsForJson = (val: unknown) => {
