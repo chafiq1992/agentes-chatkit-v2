@@ -397,6 +397,38 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
         pushIfObject((data as { result?: unknown }).result);
         pushIfObject((data as { payload?: unknown }).payload);
 
+        // ChatKit traces often include thread item envelopes; extract nested workflow item bodies
+        // Known shapes we try to normalize:
+        // - { item: { type, response_items?, workflow? } }
+        // - { body: { item: {...} } }
+        const threadItem = (data as { item?: unknown }).item;
+        if (threadItem && typeof threadItem === "object") {
+          // raw item object
+          pushIfObject(threadItem);
+          const workflow = (threadItem as Record<string, unknown>).workflow;
+          if (workflow && typeof workflow === "object") {
+            pushIfObject(workflow);
+          }
+          const responseItems = (threadItem as Record<string, unknown>).response_items;
+          if (Array.isArray(responseItems)) {
+            for (const ri of responseItems) {
+              pushIfObject(ri);
+            }
+          }
+        }
+        const body = (data as { body?: unknown }).body;
+        if (body && typeof body === "object") {
+          pushIfObject(body);
+          const innerItem = (body as Record<string, unknown>).item;
+          if (innerItem && typeof innerItem === "object") {
+            pushIfObject(innerItem);
+            const innerWorkflow = (innerItem as Record<string, unknown>).workflow;
+            if (innerWorkflow && typeof innerWorkflow === "object") {
+              pushIfObject(innerWorkflow);
+            }
+          }
+        }
+
         // Collect likely text snippets for convenience rendering outside the widget
         const pushIfString = (v: unknown) => {
           if (typeof v === "string" && v.trim()) {
@@ -414,6 +446,21 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
         const deltaJson = (data as { delta_json?: unknown }).delta_json;
         if (typeof deltaJson === "string" && deltaJson) {
           jsonTextBufferRef.current.push(deltaJson);
+        }
+
+        // ChatKit Responses API style streaming entries may use { type: "response.output_text.delta", delta }
+        const typeField = (data as { type?: unknown }).type;
+        if (typeField === "response.output_text.delta") {
+          const d = (data as { delta?: unknown }).delta;
+          if (typeof d === "string") {
+            textBufferRef.current.push(d);
+          }
+        }
+        if (typeField === "response.output_json.delta") {
+          const jd = (data as { delta?: unknown }).delta;
+          if (typeof jd === "string") {
+            jsonTextBufferRef.current.push(jd);
+          }
         }
 
         // Some payloads provide a content array with text items

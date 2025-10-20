@@ -22,7 +22,7 @@ export default function App() {
     }
   }, []);
 
-  const handleResponseJSON = useCallback((payload: { outputs: unknown[]; full: unknown }) => {
+  const handleResponseJSON = useCallback((payload: { outputs: unknown[]; full: unknown; text?: string }) => {
     setResponses((prev) => [payload, ...prev]);
   }, []);
 
@@ -72,6 +72,28 @@ export default function App() {
                       </button>
                     </div>
                     <div className="whitespace-pre-wrap break-words text-sm text-slate-800 dark:text-slate-100">{resp.text}</div>
+                  </div>
+                ) : null}
+
+                {/* Extracted JSON outputs card(s) */}
+                {Array.isArray(resp.outputs) && resp.outputs.length > 0 ? (
+                  <div className="rounded-xl border border-emerald-200 bg-white p-4 shadow-sm dark:border-emerald-900/60 dark:bg-slate-900">
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Extracted Output</div>
+                      <button
+                        onClick={() => {
+                          try {
+                            void navigator.clipboard.writeText(JSON.stringify(resp.outputs, null, 2));
+                          } catch {}
+                        }}
+                        className="rounded-md border border-emerald-300 px-2 py-1 text-xs text-emerald-800 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-200 dark:hover:bg-emerald-950"
+                      >
+                        Copy JSON
+                      </button>
+                    </div>
+                    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-800 dark:text-slate-100">
+{JSON.stringify(resp.outputs, null, 2)}
+                    </pre>
                   </div>
                 ) : null}
               </div>
