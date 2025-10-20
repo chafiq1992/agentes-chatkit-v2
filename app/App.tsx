@@ -7,7 +7,7 @@ import { useState, useRef } from "react";
 
 export default function App() {
   const { scheme, setScheme } = useColorScheme();
-  const [responses, setResponses] = useState<{ outputs: unknown[]; full: unknown }[]>([]);
+  const [responses, setResponses] = useState<{ outputs: unknown[]; full: unknown; text?: string }[]>([]);
   const panelRef = useRef<ChatKitPanelHandle | null>(null);
 
   const handleWidgetAction = useCallback(async (action: FactAction) => {
@@ -52,65 +52,28 @@ export default function App() {
         <div className="mx-auto w-full max-w-5xl">
           <h1 className="mb-4 text-xl font-semibold text-slate-800 dark:text-slate-100">Results</h1>
           <div className="space-y-6">
-            <div className="flex justify-end">
-              <button
-                onClick={() => {
-                  const data = panelRef.current?.getLastResults();
-                  if (!data) return;
-                  setResponses((prev) => [data, ...prev]);
-                }}
-                className="rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800 dark:bg-slate-200 dark:text-slate-900 dark:hover:bg-slate-300"
-              >
-                Fetch Latest Results
-              </button>
-            </div>
+            {/* Response cards captured from ChatKit logs */}
             {responses.map((resp, idx) => (
               <div key={idx} className="space-y-4">
-                {/* Outputs-only cards */}
-                {resp.outputs && resp.outputs.length > 0 ? (
-                  <div className="grid grid-cols-1 gap-4">
-                    {resp.outputs.map((obj, j) => (
-                      <div key={j} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                        <div className="mb-2 flex items-center justify-between">
-                          <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Output #{j + 1} (Response {responses.length - idx})</div>
-                          <button
-                            onClick={() => {
-                              try {
-                                void navigator.clipboard.writeText(JSON.stringify(obj, null, 2));
-                              } catch {}
-                            }}
-                            className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                          >
-                            Copy
-                          </button>
-                        </div>
-                        <pre className="whitespace-pre-wrap break-words text-xs text-slate-800 dark:text-slate-100">{JSON.stringify(obj, null, 2)}</pre>
-                      </div>
-                    ))}
+                {/* Primary text card */}
+                {resp.text ? (
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+                    <div className="mb-2 flex items-center justify-between">
+                      <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Assistant Response {responses.length - idx}</div>
+                      <button
+                        onClick={() => {
+                          try {
+                            void navigator.clipboard.writeText(resp.text ?? "");
+                          } catch {}
+                        }}
+                        className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                    <div className="whitespace-pre-wrap break-words text-sm text-slate-800 dark:text-slate-100">{resp.text}</div>
                   </div>
-                ) : (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-                    No structured outputs detected for this response. Full logs below.
-                  </div>
-                )}
-
-                {/* Full response card */}
-                <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                  <div className="mb-2 flex items-center justify-between">
-                    <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Full Response {responses.length - idx}</div>
-                    <button
-                      onClick={() => {
-                        try {
-                          void navigator.clipboard.writeText(JSON.stringify(resp.full, null, 2));
-                        } catch {}
-                      }}
-                      className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                    >
-                      Copy
-                    </button>
-                  </div>
-                  <pre className="whitespace-pre-wrap break-words text-xs text-slate-800 dark:text-slate-100">{JSON.stringify(resp.full, null, 2)}</pre>
-                </div>
+                ) : null}
               </div>
             ))}
           </div>

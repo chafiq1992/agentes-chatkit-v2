@@ -24,7 +24,7 @@ export type ChatKitPanelProps = {
   onWidgetAction: (action: FactAction) => Promise<void>;
   onResponseEnd: () => void;
   onThemeRequest: (scheme: ColorScheme) => void;
-  onResponseJSON?: (payload: { outputs: unknown[]; full: unknown }) => void;
+  onResponseJSON?: (payload: { outputs: unknown[]; full: unknown; text?: string }) => void;
 };
 
 export type ChatKitPanelHandle = {
@@ -75,6 +75,8 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
   const jsonCandidatesRef = useRef<unknown[]>([]);
   const lastCapturedOutputsRef = useRef<unknown[]>([]);
   const lastCapturedFullRef = useRef<unknown>(null);
+  const textBufferRef = useRef<string[]>([]);
+  const lastCapturedTextRef = useRef<string>("");
 
   const setErrorState = useCallback((updates: Partial<ErrorState>) => {
     setErrors((current) => ({ ...current, ...updates }));
@@ -333,6 +335,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
       collectingLogsRef.current = true;
       responseLogsRef.current = [];
       jsonCandidatesRef.current = [];
+      textBufferRef.current = [];
     },
     onResponseEnd: () => {
       onResponseEnd();
@@ -344,10 +347,12 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
       const outputsOnly = Array.isArray(jsonOutputs)
         ? jsonOutputs.filter((o) => o && typeof o === "object" && !Array.isArray(o))
         : [];
-      const toEmit = { outputs: outputsOnly, full: payload };
+      const textJoined = (textBufferRef.current.join("") || "").trim();
+      const toEmit = { outputs: outputsOnly, full: payload, text: textJoined || undefined };
       // persist to allow manual fetch via imperative handle
       lastCapturedOutputsRef.current = outputsOnly;
       lastCapturedFullRef.current = payload;
+      lastCapturedTextRef.current = textJoined;
       try {
         (onResponseJSON ?? (() => {}))(toEmit);
       } catch {
@@ -379,6 +384,15 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
         pushIfObject((data as { output_json?: unknown }).output_json);
         pushIfObject((data as { result?: unknown }).result);
         pushIfObject((data as { payload?: unknown }).payload);
+
+        // Collect likely text snippets for convenience rendering outside the widget
+        const pushIfString = (v: unknown) => {
+          if (typeof v === "string" && v.trim()) {
+            textBufferRef.current.push(v);
+          }
+        };
+        pushIfString((data as { text?: unknown }).text);
+        pushIfString((data as { content?: unknown }).content);
 
         // Scan string fields for embedded JSON
         const scanStringsForJson = (val: unknown) => {
@@ -432,10 +446,11 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
         ? lastCapturedOutputsRef.current
         : [];
       const full = lastCapturedFullRef.current;
+      const text = lastCapturedTextRef.current || undefined;
       if (!outputs.length && (full == null || (Array.isArray(full) && full.length === 0))) {
         return null;
       }
-      return { outputs, full };
+      return { outputs, full, text };
     },
   }));
 
