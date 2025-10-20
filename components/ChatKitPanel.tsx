@@ -145,8 +145,9 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
     };
   }, [scriptStatus, setErrorState]);
 
-  // The workflow ID is resolved on the server from CHATKIT_WORKFLOW_ID at runtime.
-  const isWorkflowConfigured = true;
+  const isWorkflowConfigured = Boolean(
+    WORKFLOW_ID && !WORKFLOW_ID.startsWith("wf_replace")
+  );
 
   useEffect(() => {
     if (!isWorkflowConfigured && isMountedRef.current) {
@@ -181,7 +182,8 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
       }
 
       if (!isWorkflowConfigured) {
-        const detail = "Server-side workflow configuration missing.";
+        const detail =
+          "Set NEXT_PUBLIC_CHATKIT_WORKFLOW_ID in your .env.local file.";
         if (isMountedRef.current) {
           setErrorState({ session: detail, retryable: false });
           setIsInitializingSession(false);
@@ -203,8 +205,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            // Let the API resolve the workflow id from environment
-            workflow: { id: undefined },
+            workflow: { id: WORKFLOW_ID },
             chatkit_configuration: {
               // enable attachments
               file_upload: {
@@ -458,7 +459,16 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
         control={chatkit.control}
         className="block h-full w-full"
       />
-      {/* Error overlay disabled to keep widget visible */}
+      <ErrorOverlay
+        error={blockingError}
+        fallbackMessage={
+          blockingError || !isInitializingSession
+            ? null
+            : "Loading assistant session..."
+        }
+        onRetry={blockingError && errors.retryable ? handleResetChat : null}
+        retryLabel="Restart chat"
+      />
     </div>
   );
 });
