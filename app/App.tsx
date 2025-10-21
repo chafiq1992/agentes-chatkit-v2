@@ -8,6 +8,7 @@ import { useState, useRef } from "react";
 export default function App() {
   const { scheme, setScheme } = useColorScheme();
   const [responses, setResponses] = useState<{ outputs: unknown[]; full: unknown; text?: string }[]>([]);
+  const [latestResponse, setLatestResponse] = useState<{ outputs: unknown[]; full: unknown; text?: string } | null>(null);
   const panelRef = useRef<ChatKitPanelHandle | null>(null);
 
   const handleWidgetAction = useCallback(async (action: FactAction) => {
@@ -20,10 +21,15 @@ export default function App() {
     if (process.env.NODE_ENV !== "production") {
       console.debug("[ChatKitPanel] response end");
     }
+    const last = panelRef.current?.getLastResults();
+    if (last) {
+      setLatestResponse({ ...last, text: (last as any).text });
+    }
   }, []);
 
   const handleResponseJSON = useCallback((payload: { outputs: unknown[]; full: unknown; text?: string }) => {
     setResponses((prev) => [payload, ...prev]);
+    setLatestResponse(payload);
   }, []);
 
   return (
@@ -52,6 +58,45 @@ export default function App() {
         <div className="mx-auto w-full max-w-5xl">
           <h1 className="mb-4 text-xl font-semibold text-slate-800 dark:text-slate-100">Results</h1>
           <div className="space-y-6">
+            {/* Latest Response card */}
+            {latestResponse ? (
+              <div className="rounded-xl border border-indigo-200 bg-white p-4 shadow-sm dark:border-indigo-900/60 dark:bg-slate-900">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="text-sm font-semibold text-indigo-700 dark:text-indigo-300">Latest Response</div>
+                  <div className="space-x-2">
+                    <button
+                      onClick={() => {
+                        try {
+                          void navigator.clipboard.writeText(latestResponse.text ?? "");
+                        } catch {}
+                      }}
+                      className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                    >
+                      Copy Text
+                    </button>
+                    <button
+                      onClick={() => {
+                        try {
+                          void navigator.clipboard.writeText(JSON.stringify(latestResponse.outputs ?? [], null, 2));
+                        } catch {}
+                      }}
+                      className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                    >
+                      Copy JSON
+                    </button>
+                  </div>
+                </div>
+                {latestResponse.text ? (
+                  <div className="whitespace-pre-wrap break-words text-sm text-slate-800 dark:text-slate-100">{latestResponse.text}</div>
+                ) : null}
+                {Array.isArray(latestResponse.outputs) && latestResponse.outputs.length > 0 ? (
+                  <pre className="mt-3 max-h-60 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-800 dark:text-slate-100">
+{JSON.stringify(latestResponse.outputs, null, 2)}
+                  </pre>
+                ) : null}
+              </div>
+            ) : null}
+
             {/* Response cards captured from ChatKit logs */}
             {responses.map((resp, idx) => (
               <div key={idx} className="space-y-4">
