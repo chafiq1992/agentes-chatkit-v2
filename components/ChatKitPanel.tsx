@@ -25,6 +25,7 @@ export type ChatKitPanelProps = {
   onResponseEnd: () => void;
   onThemeRequest: (scheme: ColorScheme) => void;
   onResponseJSON?: (payload: { outputs: unknown[]; full: unknown; text?: string }) => void;
+  workflowId?: string;
 };
 
 export type ChatKitPanelHandle = {
@@ -55,6 +56,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
     onResponseEnd,
     onThemeRequest,
     onResponseJSON,
+    workflowId,
   }: ChatKitPanelProps,
   ref
 ) {
@@ -148,14 +150,15 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
     };
   }, [scriptStatus, setErrorState]);
 
+  const effectiveWorkflowId = (workflowId?.trim() || WORKFLOW_ID).trim();
   const isWorkflowConfigured = Boolean(
-    WORKFLOW_ID && !WORKFLOW_ID.startsWith("wf_replace")
+    effectiveWorkflowId && !effectiveWorkflowId.startsWith("wf_replace")
   );
 
   useEffect(() => {
     if (!isWorkflowConfigured && isMountedRef.current) {
       setErrorState({
-        session: "Set NEXT_PUBLIC_CHATKIT_WORKFLOW_ID in your .env.local file.",
+        session: "Provide a workflowId prop or set NEXT_PUBLIC_CHATKIT_WORKFLOW_ID in your .env.local file.",
         retryable: false,
       });
       setIsInitializingSession(false);
@@ -179,14 +182,14 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
       if (isDev) {
         console.info("[ChatKitPanel] getClientSecret invoked", {
           currentSecretPresent: Boolean(currentSecret),
-          workflowId: WORKFLOW_ID,
+          workflowId: effectiveWorkflowId,
           endpoint: CREATE_SESSION_ENDPOINT,
         });
       }
 
       if (!isWorkflowConfigured) {
         const detail =
-          "Set NEXT_PUBLIC_CHATKIT_WORKFLOW_ID in your .env.local file.";
+          "Provide a workflowId prop or set NEXT_PUBLIC_CHATKIT_WORKFLOW_ID in your .env.local file.";
         if (isMountedRef.current) {
           setErrorState({ session: detail, retryable: false });
           setIsInitializingSession(false);
@@ -208,7 +211,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            workflow: { id: WORKFLOW_ID },
+            workflow: { id: effectiveWorkflowId },
             chatkit_configuration: {
               // enable attachments
               file_upload: {
@@ -554,7 +557,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
       hasControl: Boolean(chatkit.control),
       scriptStatus,
       hasError: Boolean(blockingError),
-      workflowId: WORKFLOW_ID,
+      workflowId: effectiveWorkflowId,
     });
   }
 
