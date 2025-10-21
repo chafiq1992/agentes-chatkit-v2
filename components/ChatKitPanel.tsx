@@ -28,7 +28,7 @@ export type ChatKitPanelProps = {
 };
 
 export type ChatKitPanelHandle = {
-  getLastResults: () => { outputs: unknown[]; full: unknown } | null;
+  getLastResults: () => { outputs: unknown[]; full: unknown; text?: string } | null;
 };
 
 type ErrorState = {

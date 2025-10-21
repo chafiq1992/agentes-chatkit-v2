@@ -23,7 +23,7 @@ export default function App() {
     }
     const last = panelRef.current?.getLastResults();
     if (last) {
-      setLatestResponse({ ...last, text: (last as any).text });
+      setLatestResponse(last);
     }
   }, []);
 
