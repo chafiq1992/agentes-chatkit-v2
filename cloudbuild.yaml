@@ -5,7 +5,7 @@ substitutions:
   _REGION: europe-west1
   _SERVICE: agents-chatkit-v2
   _REPO: agentes-chatkit-v2
-  _WORKFLOW_ID: "wf_68ee77a70ce08190a75e19e9b0a4f27f094b95735d6ec6b3"
+  _WORKFLOW_ID: "wf_68e8d36769c08190afd14b9c9281a7c6064da5bd359ab3ce"
   
 steps:
   - name: gcr.io/cloud-builders/docker
