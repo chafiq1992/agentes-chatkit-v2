@@ -1,7 +1,7 @@
 # Multi-stage Dockerfile for Next.js on Cloud Run
 
 # 1) Builder image: install deps and build
-FROM node:20-bookworm-slim AS builder
+FROM node:20-bookworm-slim AS builder 
 WORKDIR /app
 
 # Install dependencies first (better layer caching)
