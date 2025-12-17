@@ -40,6 +40,7 @@ export function AssistantResponseCard({
   isHighlighted?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const hasText = Boolean(response.text?.trim());
   const text = response.text ?? "";
 
   const blocks = useMemo(() => parseFencedBlocks(text), [text]);
@@ -87,7 +88,7 @@ export function AssistantResponseCard({
         </div>
       </div>
 
-      {text ? (
+      {hasText ? (
         <div className={["px-4 py-3", clampClass].join(" ")}>
           <div className="space-y-3 text-sm leading-relaxed text-slate-800 dark:text-slate-100">
             {blocks.map((b, idx) => {
@@ -118,6 +119,25 @@ export function AssistantResponseCard({
                 </div>
               );
             })}
+          </div>
+        </div>
+      ) : hasJson ? (
+        <div className="px-4 py-3">
+          <div className="mb-2 text-xs text-slate-500 dark:text-slate-400">
+            Text wasn’t captured from ChatKit for this response — showing extracted JSON instead.
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950">
+            <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-400">
+              <span className="truncate">json</span>
+              <CopyButton
+                text={jsonText}
+                label="Copy"
+                className="border-slate-300 bg-white/70 hover:bg-white dark:border-slate-700 dark:bg-slate-900/60 dark:hover:bg-slate-900"
+              />
+            </div>
+            <pre className="max-h-96 overflow-auto whitespace-pre p-3 text-xs leading-relaxed text-slate-900 dark:text-slate-100">
+              <code>{jsonText}</code>
+            </pre>
           </div>
         </div>
       ) : (

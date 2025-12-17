@@ -85,6 +85,190 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
     setErrors((current) => ({ ...current, ...updates }));
   }, []);
 
+  const handleLog = useCallback((detail: { name: string; data?: Record<string, unknown> }) => {
+    // Collect all diagnostic logs during a single assistant response
+    if (!collectingLogsRef.current) return;
+    try {
+      const entry = { name: detail?.name, data: detail?.data } as Record<string, unknown>;
+      responseLogsRef.current.push(entry);
+
+      // Heuristically extract structured JSON objects from the log payloads
+      const maybeObjects: unknown[] = [];
+
+      const pushIfObject = (v: unknown) => {
+        if (v && typeof v === "object" && !Array.isArray(v)) {
+          maybeObjects.push(v);
+        }
+      };
+
+      // Direct object forms commonly used: data.output, data.output_json, data.result, data.payload
+      const data = (entry.data ?? {}) as Record<string, unknown>;
+      pushIfObject((data as { output?: unknown }).output);
+      pushIfObject((data as { output_json?: unknown }).output_json);
+      pushIfObject((data as { result?: unknown }).result);
+      pushIfObject((data as { payload?: unknown }).payload);
+
+      // ChatKit traces often include thread item envelopes; extract nested workflow item bodies
+      // Known shapes we try to normalize:
+      // - { item: { type, response_items?, workflow? } }
+      // - { body: { item: {...} } }
+      const threadItem = (data as { item?: unknown }).item;
+      if (threadItem && typeof threadItem === "object") {
+        // raw item object
+        pushIfObject(threadItem);
+        const workflow = (threadItem as Record<string, unknown>).workflow;
+        if (workflow && typeof workflow === "object") {
+          pushIfObject(workflow);
+        }
+        const responseItems = (threadItem as Record<string, unknown>).response_items;
+        if (Array.isArray(responseItems)) {
+          for (const ri of responseItems) {
+            pushIfObject(ri);
+          }
+        }
+      }
+      const body = (data as { body?: unknown }).body;
+      if (body && typeof body === "object") {
+        pushIfObject(body);
+        const innerItem = (body as Record<string, unknown>).item;
+        if (innerItem && typeof innerItem === "object") {
+          pushIfObject(innerItem);
+          const innerWorkflow = (innerItem as Record<string, unknown>).workflow;
+          if (innerWorkflow && typeof innerWorkflow === "object") {
+            pushIfObject(innerWorkflow);
+          }
+        }
+      }
+
+      // Collect likely text snippets for convenience rendering outside the widget
+      const pushIfString = (v: unknown) => {
+        if (typeof v === "string" && v.trim()) {
+          textBufferRef.current.push(v);
+        }
+      };
+      pushIfString((data as { text?: unknown }).text);
+      pushIfString((data as { content?: unknown }).content);
+
+      // Heuristics for ChatKit streaming deltas
+      const delta = (data as { delta?: unknown }).delta;
+      if (typeof delta === "string" && delta) {
+        textBufferRef.current.push(delta);
+      }
+      const deltaJson = (data as { delta_json?: unknown }).delta_json;
+      if (typeof deltaJson === "string" && deltaJson) {
+        jsonTextBufferRef.current.push(deltaJson);
+      }
+
+      // ChatKit Responses API style streaming entries may use { type: "response.output_text.delta", delta }
+      const typeField = (data as { type?: unknown }).type;
+      if (typeField === "response.output_text.delta") {
+        const d = (data as { delta?: unknown }).delta;
+        if (typeof d === "string") {
+          textBufferRef.current.push(d);
+        }
+      }
+      if (typeField === "response.output_json.delta") {
+        const jd = (data as { delta?: unknown }).delta;
+        if (typeof jd === "string") {
+          jsonTextBufferRef.current.push(jd);
+        }
+      }
+
+      // Some payloads provide a content array with text items
+      const content = (data as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        for (const item of content) {
+          if (item && typeof item === "object") {
+            const maybeText = (item as Record<string, unknown>).text;
+            if (typeof maybeText === "string" && maybeText.trim()) {
+              textBufferRef.current.push(maybeText);
+            } else if (
+              maybeText &&
+              typeof maybeText === "object" &&
+              typeof (maybeText as { value?: unknown }).value === "string"
+            ) {
+              const val = (maybeText as { value: string }).value;
+              if (val.trim()) {
+                textBufferRef.current.push(val);
+              }
+            }
+          }
+        }
+      }
+
+      // Scan string fields for embedded JSON
+      const scanStringsForJson = (val: unknown) => {
+        if (typeof val === "string") {
+          const t = val.trim();
+          if (t.startsWith("{") && t.endsWith("}")) {
+            try {
+              const parsed = JSON.parse(t);
+              pushIfObject(parsed);
+            } catch {}
+          }
+        } else if (val && typeof val === "object") {
+          for (const v of Object.values(val as Record<string, unknown>)) {
+            scanStringsForJson(v);
+          }
+        }
+      };
+      scanStringsForJson(data);
+
+      if (maybeObjects.length > 0) {
+        // Deduplicate by JSON string
+        const seen = new Set(
+          jsonCandidatesRef.current
+            .map((o) => {
+              try {
+                return JSON.stringify(o);
+              } catch {
+                return null;
+              }
+            })
+            .filter(Boolean) as string[]
+        );
+        for (const obj of maybeObjects) {
+          try {
+            const key = JSON.stringify(obj);
+            if (!seen.has(key)) {
+              jsonCandidatesRef.current.push(obj);
+              seen.add(key);
+            }
+          } catch {
+            // ignore non-serializable
+          }
+        }
+      }
+    } catch {
+      // ignore malformed diagnostics
+    }
+  }, []);
+
+  useEffect(() => {
+    // In some environments, `useChatKit({ onLog })` may not fire. The web component always emits `chatkit.log`.
+    const el = (chatkit.control as unknown as { ref?: { current?: unknown } })?.ref?.current as
+      | (EventTarget & { addEventListener: EventTarget["addEventListener"] })
+      | undefined;
+
+    if (!el?.addEventListener) return;
+
+    const onLogEvent = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>)?.detail as unknown;
+      if (
+        detail &&
+        typeof detail === "object" &&
+        "name" in (detail as Record<string, unknown>)
+      ) {
+        handleLog(detail as { name: string; data?: Record<string, unknown> });
+      }
+    };
+
+    el.addEventListener("chatkit.log" as unknown as keyof HTMLElementEventMap, onLogEvent as EventListener);
+    return () => {
+      el.removeEventListener("chatkit.log" as unknown as keyof HTMLElementEventMap, onLogEvent as EventListener);
+    };
+  }, [chatkit.control, handleLog]);
+
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
@@ -377,156 +561,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
     onThreadChange: () => {
       processedFacts.current.clear();
     },
-    onLog: (detail: { name: string; data?: Record<string, unknown> }) => {
-      // Collect all diagnostic logs during a single assistant response
-      if (!collectingLogsRef.current) return;
-      try {
-        const entry = { name: detail?.name, data: detail?.data } as Record<string, unknown>;
-        responseLogsRef.current.push(entry);
-
-        // Heuristically extract structured JSON objects from the log payloads
-        const maybeObjects: unknown[] = [];
-
-        const pushIfObject = (v: unknown) => {
-          if (v && typeof v === "object" && !Array.isArray(v)) {
-            maybeObjects.push(v);
-          }
-        };
-
-        // Direct object forms commonly used: data.output, data.output_json, data.result, data.payload
-        const data = (entry.data ?? {}) as Record<string, unknown>;
-        pushIfObject((data as { output?: unknown }).output);
-        pushIfObject((data as { output_json?: unknown }).output_json);
-        pushIfObject((data as { result?: unknown }).result);
-        pushIfObject((data as { payload?: unknown }).payload);
-
-        // ChatKit traces often include thread item envelopes; extract nested workflow item bodies
-        // Known shapes we try to normalize:
-        // - { item: { type, response_items?, workflow? } }
-        // - { body: { item: {...} } }
-        const threadItem = (data as { item?: unknown }).item;
-        if (threadItem && typeof threadItem === "object") {
-          // raw item object
-          pushIfObject(threadItem);
-          const workflow = (threadItem as Record<string, unknown>).workflow;
-          if (workflow && typeof workflow === "object") {
-            pushIfObject(workflow);
-          }
-          const responseItems = (threadItem as Record<string, unknown>).response_items;
-          if (Array.isArray(responseItems)) {
-            for (const ri of responseItems) {
-              pushIfObject(ri);
-            }
-          }
-        }
-        const body = (data as { body?: unknown }).body;
-        if (body && typeof body === "object") {
-          pushIfObject(body);
-          const innerItem = (body as Record<string, unknown>).item;
-          if (innerItem && typeof innerItem === "object") {
-            pushIfObject(innerItem);
-            const innerWorkflow = (innerItem as Record<string, unknown>).workflow;
-            if (innerWorkflow && typeof innerWorkflow === "object") {
-              pushIfObject(innerWorkflow);
-            }
-          }
-        }
-
-        // Collect likely text snippets for convenience rendering outside the widget
-        const pushIfString = (v: unknown) => {
-          if (typeof v === "string" && v.trim()) {
-            textBufferRef.current.push(v);
-          }
-        };
-        pushIfString((data as { text?: unknown }).text);
-        pushIfString((data as { content?: unknown }).content);
-
-        // Heuristics for ChatKit streaming deltas
-        const delta = (data as { delta?: unknown }).delta;
-        if (typeof delta === "string" && delta) {
-          textBufferRef.current.push(delta);
-        }
-        const deltaJson = (data as { delta_json?: unknown }).delta_json;
-        if (typeof deltaJson === "string" && deltaJson) {
-          jsonTextBufferRef.current.push(deltaJson);
-        }
-
-        // ChatKit Responses API style streaming entries may use { type: "response.output_text.delta", delta }
-        const typeField = (data as { type?: unknown }).type;
-        if (typeField === "response.output_text.delta") {
-          const d = (data as { delta?: unknown }).delta;
-          if (typeof d === "string") {
-            textBufferRef.current.push(d);
-          }
-        }
-        if (typeField === "response.output_json.delta") {
-          const jd = (data as { delta?: unknown }).delta;
-          if (typeof jd === "string") {
-            jsonTextBufferRef.current.push(jd);
-          }
-        }
-
-        // Some payloads provide a content array with text items
-        const content = (data as { content?: unknown }).content;
-        if (Array.isArray(content)) {
-          for (const item of content) {
-            if (item && typeof item === "object") {
-              const maybeText = (item as Record<string, unknown>).text;
-              if (typeof maybeText === "string" && maybeText.trim()) {
-                textBufferRef.current.push(maybeText);
-              } else if (
-                maybeText &&
-                typeof maybeText === "object" &&
-                typeof (maybeText as { value?: unknown }).value === "string"
-              ) {
-                const val = (maybeText as { value: string }).value;
-                if (val.trim()) {
-                  textBufferRef.current.push(val);
-                }
-              }
-            }
-          }
-        }
-
-        // Scan string fields for embedded JSON
-        const scanStringsForJson = (val: unknown) => {
-          if (typeof val === "string") {
-            const t = val.trim();
-            if (t.startsWith("{") && t.endsWith("}")) {
-              try {
-                const parsed = JSON.parse(t);
-                pushIfObject(parsed);
-              } catch {}
-            }
-          } else if (val && typeof val === "object") {
-            for (const v of Object.values(val as Record<string, unknown>)) {
-              scanStringsForJson(v);
-            }
-          }
-        };
-        scanStringsForJson(data);
-
-        if (maybeObjects.length > 0) {
-          // Deduplicate by JSON string
-          const seen = new Set(jsonCandidatesRef.current.map((o) => {
-            try { return JSON.stringify(o); } catch { return null; }
-          }).filter(Boolean) as string[]);
-          for (const obj of maybeObjects) {
-            try {
-              const key = JSON.stringify(obj);
-              if (!seen.has(key)) {
-                jsonCandidatesRef.current.push(obj);
-                seen.add(key);
-              }
-            } catch {
-              // ignore non-serializable
-            }
-          }
-        }
-      } catch {
-        // ignore malformed diagnostics
-      }
-    },
+    onLog: handleLog,
     onError: ({ error }: { error: unknown }) => {
       // Note that Chatkit UI handles errors for your users.
       // Thus, your app code doesn't need to display errors on UI.
