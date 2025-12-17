@@ -4,6 +4,8 @@ import { useCallback } from "react";
 import { ChatKitPanel, type FactAction, type ChatKitPanelHandle } from "@/components/ChatKitPanel";
 import { useColorScheme } from "@/hooks/useColorScheme";
 import { useState, useRef } from "react";
+import { AssistantResponseCard } from "@/components/AssistantResponseCard";
+import { CopyButton } from "@/components/CopyButton";
 
 export default function App() {
   const { scheme, setScheme } = useColorScheme();
@@ -39,6 +41,34 @@ export default function App() {
         <div className="h-full">
           <div className="absolute inset-y-0 left-0 w-[25vw] transition-transform duration-300 ease-in-out shadow-xl border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
             <div className="p-3 text-xs text-slate-500 dark:text-slate-400">Chat</div>
+
+            <div className="px-3 pb-2">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/40">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                      Quick copy (latest assistant output)
+                    </div>
+                    <div className="mt-1 line-clamp-3 whitespace-pre-wrap break-words text-xs text-slate-600 dark:text-slate-300">
+                      {latestResponse?.text?.trim()
+                        ? latestResponse.text
+                        : "No response yet."}
+                    </div>
+                  </div>
+                  <div className="flex flex-none flex-col gap-2">
+                    <CopyButton text={latestResponse?.text ?? ""} label="Copy" />
+                    <CopyButton
+                      text={
+                        latestResponse?.outputs?.length
+                          ? JSON.stringify(latestResponse.outputs, null, 2)
+                          : ""
+                      }
+                      label="Copy JSON"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
             <div className="px-3 pb-3">
               <ChatKitPanel
                 ref={panelRef}
@@ -56,93 +86,44 @@ export default function App() {
       {/* Main content occupies remaining 75% width and is never covered */}
       <div className="ml-[25vw] p-4 lg:pl-[2rem]">
         <div className="mx-auto w-full max-w-5xl">
-          <h1 className="mb-4 text-xl font-semibold text-slate-800 dark:text-slate-100">Results</h1>
+          <div className="mb-4 flex items-end justify-between gap-4">
+            <div>
+              <h1 className="text-xl font-semibold text-slate-800 dark:text-slate-100">Chat Output</h1>
+              <div className="text-sm text-slate-600 dark:text-slate-300">
+                Every assistant response is shown here in a clean, copy-ready format.
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <CopyButton text={latestResponse?.text ?? ""} label="Copy latest" />
+              <button
+                type="button"
+                onClick={() => {
+                  setResponses([]);
+                  setLatestResponse(null);
+                }}
+                className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                Clear
+              </button>
+            </div>
+          </div>
           <div className="space-y-6">
-            {/* Latest Response card */}
-            {latestResponse ? (
-              <div className="rounded-xl border border-indigo-200 bg-white p-4 shadow-sm dark:border-indigo-900/60 dark:bg-slate-900">
-                <div className="mb-2 flex items-center justify-between">
-                  <div className="text-sm font-semibold text-indigo-700 dark:text-indigo-300">Latest Response</div>
-                  <div className="space-x-2">
-                    <button
-                      onClick={() => {
-                        try {
-                          void navigator.clipboard.writeText(latestResponse.text ?? "");
-                        } catch {}
-                      }}
-                      className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                    >
-                      Copy Text
-                    </button>
-                    <button
-                      onClick={() => {
-                        try {
-                          void navigator.clipboard.writeText(JSON.stringify(latestResponse.outputs ?? [], null, 2));
-                        } catch {}
-                      }}
-                      className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                    >
-                      Copy JSON
-                    </button>
-                  </div>
-                </div>
-                {latestResponse.text ? (
-                  <div className="whitespace-pre-wrap break-words text-sm text-slate-800 dark:text-slate-100">{latestResponse.text}</div>
-                ) : null}
-                {Array.isArray(latestResponse.outputs) && latestResponse.outputs.length > 0 ? (
-                  <pre className="mt-3 max-h-60 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-800 dark:text-slate-100">
-{JSON.stringify(latestResponse.outputs, null, 2)}
-                  </pre>
-                ) : null}
+            {responses.length ? (
+              <div className="space-y-4">
+                {responses.map((resp, idx) => (
+                  <AssistantResponseCard
+                    key={idx}
+                    response={resp}
+                    title={`Assistant Response ${responses.length - idx}`}
+                    isHighlighted={idx === 0}
+                  />
+                ))}
               </div>
-            ) : null}
-
-            {/* Response cards captured from ChatKit logs */}
-            {responses.map((resp, idx) => (
-              <div key={idx} className="space-y-4">
-                {/* Primary text card */}
-                {resp.text ? (
-                  <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">Assistant Response {responses.length - idx}</div>
-                      <button
-                        onClick={() => {
-                          try {
-                            void navigator.clipboard.writeText(resp.text ?? "");
-                          } catch {}
-                        }}
-                        className="rounded-md border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                      >
-                        Copy
-                      </button>
-                    </div>
-                    <div className="whitespace-pre-wrap break-words text-sm text-slate-800 dark:text-slate-100">{resp.text}</div>
-                  </div>
-                ) : null}
-
-                {/* Extracted JSON outputs card(s) */}
-                {Array.isArray(resp.outputs) && resp.outputs.length > 0 ? (
-                  <div className="rounded-xl border border-emerald-200 bg-white p-4 shadow-sm dark:border-emerald-900/60 dark:bg-slate-900">
-                    <div className="mb-2 flex items-center justify-between">
-                      <div className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">Extracted Output</div>
-                      <button
-                        onClick={() => {
-                          try {
-                            void navigator.clipboard.writeText(JSON.stringify(resp.outputs, null, 2));
-                          } catch {}
-                        }}
-                        className="rounded-md border border-emerald-300 px-2 py-1 text-xs text-emerald-800 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-200 dark:hover:bg-emerald-950"
-                      >
-                        Copy JSON
-                      </button>
-                    </div>
-                    <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-800 dark:text-slate-100">
-{JSON.stringify(resp.outputs, null, 2)}
-                    </pre>
-                  </div>
-                ) : null}
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                No assistant output yet. Ask something in the chat panel.
               </div>
-            ))}
+            )}
           </div>
         </div>
       </div>
