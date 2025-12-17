@@ -245,31 +245,6 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
   }, []);
 
   useEffect(() => {
-    // In some environments, `useChatKit({ onLog })` may not fire. The web component always emits `chatkit.log`.
-    const el = (chatkit.control as unknown as { ref?: { current?: unknown } })?.ref?.current as
-      | (EventTarget & { addEventListener: EventTarget["addEventListener"] })
-      | undefined;
-
-    if (!el?.addEventListener) return;
-
-    const onLogEvent = (event: Event) => {
-      const detail = (event as CustomEvent<unknown>)?.detail as unknown;
-      if (
-        detail &&
-        typeof detail === "object" &&
-        "name" in (detail as Record<string, unknown>)
-      ) {
-        handleLog(detail as { name: string; data?: Record<string, unknown> });
-      }
-    };
-
-    el.addEventListener("chatkit.log" as unknown as keyof HTMLElementEventMap, onLogEvent as EventListener);
-    return () => {
-      el.removeEventListener("chatkit.log" as unknown as keyof HTMLElementEventMap, onLogEvent as EventListener);
-    };
-  }, [chatkit.control, handleLog]);
-
-  useEffect(() => {
     return () => {
       isMountedRef.current = false;
     };
@@ -462,7 +437,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
         }
       }
     },
-    [isWorkflowConfigured, setErrorState]
+    [effectiveWorkflowId, isWorkflowConfigured, setErrorState]
   );
 
   const chatkit = useChatKit({
@@ -568,6 +543,34 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
       console.error("ChatKit error", error);
     },
   });
+
+  useEffect(() => {
+    // In some environments, `useChatKit({ onLog })` may not fire. The web component always emits `chatkit.log`.
+    const el = (chatkit.control as unknown as { ref?: { current?: unknown } })?.ref
+      ?.current as
+      | (EventTarget & { addEventListener: EventTarget["addEventListener"] })
+      | undefined;
+
+    if (!el?.addEventListener) return;
+
+    const onLogEvent = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>)?.detail as unknown;
+      if (detail && typeof detail === "object" && "name" in (detail as Record<string, unknown>)) {
+        handleLog(detail as { name: string; data?: Record<string, unknown> });
+      }
+    };
+
+    el.addEventListener(
+      "chatkit.log" as unknown as keyof HTMLElementEventMap,
+      onLogEvent as EventListener
+    );
+    return () => {
+      el.removeEventListener(
+        "chatkit.log" as unknown as keyof HTMLElementEventMap,
+        onLogEvent as EventListener
+      );
+    };
+  }, [chatkit.control, handleLog]);
 
   useImperativeHandle(ref, () => ({
     getLastResults: () => {
