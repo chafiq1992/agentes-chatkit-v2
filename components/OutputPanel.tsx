@@ -14,10 +14,12 @@ export function OutputPanel({
   responses,
   isProcessing,
   onClear,
+  activeWorkflowName,
 }: {
   responses: ResponsePayload[];
   isProcessing: boolean;
   onClear: () => void;
+  activeWorkflowName?: string;
 }) {
   // Parse all responses into structured sections
   const parsedResponses = useMemo(() => {
@@ -71,8 +73,8 @@ export function OutputPanel({
             }}
           >
             {hasContent
-              ? `${parsedResponses.length} response${parsedResponses.length > 1 ? "s" : ""} · ${totalSections} section${totalSections !== 1 ? "s" : ""}`
-              : "Responses will appear here"}
+              ? `${parsedResponses.length} response${parsedResponses.length > 1 ? "s" : ""} · ${totalSections} section${totalSections !== 1 ? "s" : ""}${activeWorkflowName ? ` · ${activeWorkflowName}` : ""}`
+              : activeWorkflowName ? `${activeWorkflowName} — Responses will appear here` : "Responses will appear here"}
           </p>
         </div>
         {hasContent && (

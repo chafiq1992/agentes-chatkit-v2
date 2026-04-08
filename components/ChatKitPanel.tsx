@@ -50,6 +50,47 @@ const createInitialErrors = (): ErrorState => ({
   retryable: false,
 });
 
+/**
+ * Extract JSON objects from raw text by brace-matching.
+ * Handles concatenated JSON objects and JSON embedded in other text.
+ */
+function extractJsonFromText(raw: string): Record<string, unknown>[] {
+  const results: Record<string, unknown>[] = [];
+  if (!raw) return results;
+
+  // Strip common ChatGPT artifacts
+  const cleaned = raw
+    .replace(/^Thought for \d+s?\s*$/gm, "")
+    .replace(/^The assistant said:\s*$/gm, "")
+    .trim();
+
+  // Brace-matching to find all top-level JSON objects
+  let depth = 0;
+  let start = -1;
+  for (let i = 0; i < cleaned.length; i++) {
+    if (cleaned[i] === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (cleaned[i] === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        const slice = cleaned.slice(start, i + 1);
+        try {
+          const parsed = JSON.parse(slice);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            results.push(parsed as Record<string, unknown>);
+          }
+        } catch {
+          // not valid JSON
+        }
+        start = -1;
+      }
+    }
+  }
+
+  return results;
+}
+
 export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(function ChatKitPanel(
   {
     theme,
@@ -494,6 +535,81 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
     [effectiveWorkflowId, isWorkflowConfigured, setErrorState]
   );
 
+  const widgetContainerRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * Extract the last assistant message text directly from the ChatKit widget DOM.
+   * This is the primary strategy since ChatKit's onLog events don't reliably
+   * expose the actual message content.
+   */
+  const extractTextFromDOM = useCallback((): string => {
+    const container = widgetContainerRef.current;
+    if (!container) return "";
+
+    try {
+      // ChatKit renders messages inside the <openai-chatkit> web component.
+      // Look for all assistant message elements. The widget uses various class names
+      // and data attributes. We try multiple selectors.
+      const chatEl = container.querySelector("openai-chatkit");
+      const root = chatEl?.shadowRoot ?? chatEl ?? container;
+
+      // Strategy 1: Look for message elements with role or data attributes
+      const selectors = [
+        '[data-role="assistant"]',
+        '[data-message-role="assistant"]',
+        '.assistant-message',
+        '[class*="assistant"]',
+        '[class*="message"]',
+      ];
+
+      let allMessages: Element[] = [];
+      for (const sel of selectors) {
+        const found = root.querySelectorAll(sel);
+        if (found.length > 0) {
+          allMessages = Array.from(found);
+          break;
+        }
+      }
+
+      // Strategy 2: If no specific selectors matched, get all text blocks
+      // in the widget that could be message containers
+      if (allMessages.length === 0) {
+        // Look for the thread/message list area
+        const threadSelectors = [
+          '[class*="thread"]',
+          '[class*="messages"]',
+          '[class*="conversation"]',
+          '[role="log"]',
+          '[role="list"]',
+        ];
+        for (const sel of threadSelectors) {
+          const threadEl = root.querySelector(sel);
+          if (threadEl) {
+            // Get all direct children or message-like blocks
+            const children = threadEl.querySelectorAll('[class*="message"], [class*="item"], [class*="turn"]');
+            if (children.length > 0) {
+              allMessages = Array.from(children);
+              break;
+            }
+          }
+        }
+      }
+
+      // Strategy 3: Broadest fallback — get all text from the widget
+      if (allMessages.length === 0) {
+        const fullText = (chatEl ?? container).textContent ?? "";
+        return fullText;
+      }
+
+      // Get the last message (most recent assistant response)
+      const lastMessage = allMessages[allMessages.length - 1];
+      return lastMessage?.textContent ?? "";
+    } catch (e) {
+      if (isDev) console.warn("[ChatKitPanel] DOM extraction failed", e);
+      return "";
+    }
+  }, []);
+
   const chatkit = useChatKit({
     api: { getClientSecret },
     theme: {
@@ -576,16 +692,45 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
           }
         } catch {}
       }
-      const textJoined = (textBufferRef.current.join("") || "").trim();
-      const toEmit = { outputs: outputsOnly, full: payload, text: textJoined || undefined };
-      // persist to allow manual fetch via imperative handle
-      lastCapturedOutputsRef.current = outputsOnly;
-      lastCapturedFullRef.current = payload;
-      lastCapturedTextRef.current = textJoined;
-      try {
-        (onResponseJSON ?? (() => {}))(toEmit);
-      } catch {
-        // ignore errors from consumer code
+      let textJoined = (textBufferRef.current.join("") || "").trim();
+
+      // If we didn't capture text from streaming events, try DOM scraping
+      // Use a delay to let the ChatKit widget finish rendering
+      const emitResult = (finalText: string) => {
+        const toEmit = { outputs: outputsOnly, full: payload, text: finalText || undefined };
+        lastCapturedOutputsRef.current = outputsOnly;
+        lastCapturedFullRef.current = payload;
+        lastCapturedTextRef.current = finalText;
+
+        // Try to extract JSON from the text if outputs are empty
+        if (outputsOnly.length === 0 && finalText) {
+          const jsonObjects = extractJsonFromText(finalText);
+          for (const obj of jsonObjects) {
+            outputsOnly.push(obj);
+          }
+          toEmit.outputs = outputsOnly;
+        }
+
+        try {
+          (onResponseJSON ?? (() => {}))(toEmit);
+        } catch {
+          // ignore errors from consumer code
+        }
+      };
+
+      if (!textJoined && outputsOnly.length === 0) {
+        // No text was captured from streaming — use DOM extraction after render
+        requestAnimationFrame(() => {
+          setTimeout(() => {
+            const domText = extractTextFromDOM();
+            if (domText.trim()) {
+              textJoined = domText.trim();
+            }
+            emitResult(textJoined);
+          }, 300);
+        });
+      } else {
+        emitResult(textJoined);
       }
     },
     onThreadChange: () => {
@@ -655,7 +800,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
   }
 
   return (
-    <div className="relative pb-8 flex h-full w-full rounded-xl flex-col overflow-hidden" style={{ background: "var(--surface)" }}>
+    <div ref={widgetContainerRef} className="relative pb-8 flex h-full w-full rounded-xl flex-col overflow-hidden" style={{ background: "var(--surface)" }}>
       <ChatKit
         key={widgetInstanceKey}
         control={chatkit.control}

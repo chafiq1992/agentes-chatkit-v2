@@ -4,12 +4,17 @@ import { useCallback, useState, useRef } from "react";
 import { ChatKitPanel, type FactAction, type ChatKitPanelHandle } from "@/components/ChatKitPanel";
 import { useColorScheme } from "@/hooks/useColorScheme";
 import { OutputPanel } from "@/components/OutputPanel";
+import { WorkflowSwitcher } from "@/components/WorkflowSwitcher";
+import { WORKFLOW_ID } from "@/lib/config";
 
 export default function App() {
   const { scheme, setScheme } = useColorScheme();
   const [responses, setResponses] = useState<{ outputs: unknown[]; full: unknown; text?: string }[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [chatCollapsed, setChatCollapsed] = useState(false);
+  const [activeWorkflowId, setActiveWorkflowId] = useState<string>(WORKFLOW_ID);
+  const [activeWorkflowName, setActiveWorkflowName] = useState<string>("Default Agent");
+  const [chatKey, setChatKey] = useState(0); // Forces ChatKitPanel to remount on workflow change
   const panelRef = useRef<ChatKitPanelHandle | null>(null);
 
   const handleWidgetAction = useCallback(async (action: FactAction) => {
@@ -24,9 +29,6 @@ export default function App() {
 
   const handleResponseEnd = useCallback(() => {
     setIsProcessing(false);
-    if (process.env.NODE_ENV !== "production") {
-      console.debug("[App] response end");
-    }
   }, []);
 
   const handleResponseJSON = useCallback((payload: { outputs: unknown[]; full: unknown; text?: string }) => {
@@ -36,6 +38,15 @@ export default function App() {
 
   const handleClear = useCallback(() => {
     setResponses([]);
+  }, []);
+
+  const handleWorkflowChange = useCallback((workflowId: string, name: string) => {
+    setActiveWorkflowId(workflowId);
+    setActiveWorkflowName(name);
+    // Clear outputs and remount the chat panel with new workflow
+    setResponses([]);
+    setIsProcessing(false);
+    setChatKey((k) => k + 1);
   }, []);
 
   return (
@@ -128,34 +139,35 @@ export default function App() {
           {/* Chat header */}
           <div
             style={{
-              padding: "12px 16px",
+              padding: "10px 12px",
               borderBottom: "1px solid var(--border)",
               display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
+              flexDirection: "column",
+              gap: 6,
               flexShrink: 0,
             }}
           >
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  background: "var(--success)",
-                }}
-              />
-              <span
-                style={{
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: "var(--foreground)",
-                }}
-              >
-                Agent Chat
-              </span>
-            </div>
-            <div style={{ display: "flex", gap: 6 }}>
+            {/* Top row: title + theme */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    background: "var(--success)",
+                  }}
+                />
+                <span
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: "var(--foreground)",
+                  }}
+                >
+                  Agent Chat
+                </span>
+              </div>
               <button
                 type="button"
                 className="copy-btn"
@@ -165,6 +177,11 @@ export default function App() {
                 {scheme === "dark" ? "☀️" : "🌙"}
               </button>
             </div>
+            {/* Bottom row: workflow switcher */}
+            <WorkflowSwitcher
+              currentEnvWorkflowId={WORKFLOW_ID}
+              onWorkflowChange={handleWorkflowChange}
+            />
           </div>
 
           {/* ChatKit widget */}
@@ -176,8 +193,10 @@ export default function App() {
             }}
           >
             <ChatKitPanel
+              key={chatKey}
               ref={panelRef}
               theme={scheme}
+              workflowId={activeWorkflowId}
               onWidgetAction={handleWidgetAction}
               onResponseEnd={handleResponseEnd}
               onThemeRequest={setScheme}
@@ -201,6 +220,7 @@ export default function App() {
           responses={responses}
           isProcessing={isProcessing}
           onClear={handleClear}
+          activeWorkflowName={activeWorkflowName}
         />
       </div>
     </main>
