@@ -123,6 +123,106 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
   const textBufferRef = useRef<string[]>([]);
   const lastCapturedTextRef = useRef<string>("");
   const jsonTextBufferRef = useRef<string[]>([]);
+  // Fetch interceptor buffer: captures text from OpenAI's SSE responses
+  const fetchInterceptBufferRef = useRef<string[]>([]);
+
+  // Set up fetch interceptor to capture OpenAI streaming responses
+  useEffect(() => {
+    if (!isBrowser) return;
+
+    const originalFetch = window.fetch;
+    const interceptedFetch: typeof window.fetch = async (...args) => {
+      const response = await originalFetch.apply(window, args);
+
+      // Check if this is an OpenAI API call
+      const url = typeof args[0] === "string" ? args[0] : (args[0] as Request)?.url;
+      const isOpenAICall = url && (
+        url.includes("api.openai.com") ||
+        url.includes("chatkit") ||
+        url.includes("responses") ||
+        url.includes("threads")
+      );
+
+      if (isOpenAICall && response.body && response.headers.get("content-type")?.includes("text/event-stream")) {
+        // Clone the response so ChatKit still gets its data
+        const [forChatKit, forUs] = response.body.tee();
+
+        // Read our copy in the background
+        const reader = forUs.getReader();
+        const decoder = new TextDecoder();
+
+        (async () => {
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              const chunk = decoder.decode(value, { stream: true });
+
+              // Parse SSE events from the chunk
+              const lines = chunk.split("\n");
+              for (const line of lines) {
+                if (!line.startsWith("data: ")) continue;
+                const jsonStr = line.substring(6).trim();
+                if (jsonStr === "[DONE]") continue;
+
+                try {
+                  const evt = JSON.parse(jsonStr);
+                  const evtType = evt?.type;
+
+                  // Capture text deltas
+                  if (evtType === "response.output_text.delta" && typeof evt.delta === "string") {
+                    fetchInterceptBufferRef.current.push(evt.delta);
+                    textBufferRef.current.push(evt.delta);
+                  }
+
+                  // Capture completed text
+                  if (evtType === "response.output_text.done" && typeof evt.text === "string") {
+                    console.log("[FetchIntercept] Got completed text, length:", evt.text.length);
+                    fetchInterceptBufferRef.current = [evt.text];
+                    textBufferRef.current = [evt.text];
+                  }
+
+                  // Capture from response.completed
+                  if (evtType === "response.completed" && evt.response?.output) {
+                    for (const item of evt.response.output) {
+                      if (item?.type === "message" && Array.isArray(item.content)) {
+                        for (const c of item.content) {
+                          if (c?.type === "output_text" && typeof c.text === "string") {
+                            console.log("[FetchIntercept] Got message text from response.completed, length:", c.text.length);
+                            fetchInterceptBufferRef.current = [c.text];
+                            textBufferRef.current = [c.text];
+                          }
+                        }
+                      }
+                    }
+                  }
+                } catch {
+                  // Not JSON, skip
+                }
+              }
+            }
+          } catch (e) {
+            console.warn("[FetchIntercept] Stream read error:", e);
+          }
+        })();
+
+        // Return a new response with the ChatKit stream
+        return new Response(forChatKit, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        });
+      }
+
+      return response;
+    };
+
+    window.fetch = interceptedFetch;
+
+    return () => {
+      window.fetch = originalFetch;
+    };
+  }, []);
 
   const setErrorState = useCallback((updates: Partial<ErrorState>) => {
     setErrors((current) => ({ ...current, ...updates }));
@@ -134,6 +234,9 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
     try {
       const entry = { name: detail?.name, data: detail?.data } as Record<string, unknown>;
       responseLogsRef.current.push(entry);
+
+      // DEBUG: Log every single event for diagnosis
+      console.log("[ChatKitPanel:onLog]", detail?.name, JSON.stringify(detail?.data ?? {}).substring(0, 500));
 
       // Heuristically extract structured JSON objects from the log payloads
       const maybeObjects: unknown[] = [];
@@ -670,6 +773,8 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
       jsonCandidatesRef.current = [];
       textBufferRef.current = [];
       jsonTextBufferRef.current = [];
+      fetchInterceptBufferRef.current = [];
+      console.log("[ChatKitPanel] onResponseStart — buffers cleared");
       try { (onResponseStart ?? (() => {}))(); } catch {}
     },
     onResponseEnd: () => {
@@ -682,6 +787,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
       const outputsOnly = Array.isArray(jsonOutputs)
         ? jsonOutputs.filter((o) => o && typeof o === "object" && !Array.isArray(o))
         : [];
+
       // Attempt to parse any accumulated JSON text if present (streamed deltas)
       const jsonJoined = (jsonTextBufferRef.current.join("") || "").trim();
       if (jsonJoined) {
@@ -692,46 +798,57 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
           }
         } catch {}
       }
-      let textJoined = (textBufferRef.current.join("") || "").trim();
 
-      // If we didn't capture text from streaming events, try DOM scraping
-      // Use a delay to let the ChatKit widget finish rendering
-      const emitResult = (finalText: string) => {
-        const toEmit = { outputs: outputsOnly, full: payload, text: finalText || undefined };
+      // Use a delay to let the fetch interceptor finish reading the stream
+      // The SSE stream may still be processing when onResponseEnd fires
+      setTimeout(() => {
+        // Check all text sources in priority order
+        const textFromBuffer = (textBufferRef.current.join("") || "").trim();
+        const textFromFetch = (fetchInterceptBufferRef.current.join("") || "").trim();
+        
+        console.log("[ChatKitPanel] onResponseEnd — text sources:", {
+          textBuffer: textFromBuffer.length,
+          fetchBuffer: textFromFetch.length,
+          jsonOutputs: outputsOnly.length,
+          logEvents: payload.length,
+        });
+
+        // Pick the best text source (longest non-empty)
+        let textJoined = "";
+        if (textFromFetch.length > textFromBuffer.length) {
+          textJoined = textFromFetch;
+        } else {
+          textJoined = textFromBuffer;
+        }
+
+        const toEmit = { outputs: outputsOnly, full: payload, text: textJoined || undefined };
         lastCapturedOutputsRef.current = outputsOnly;
         lastCapturedFullRef.current = payload;
-        lastCapturedTextRef.current = finalText;
+        lastCapturedTextRef.current = textJoined;
 
         // Try to extract JSON from the text if outputs are empty
-        if (outputsOnly.length === 0 && finalText) {
-          const jsonObjects = extractJsonFromText(finalText);
+        if (outputsOnly.length === 0 && textJoined) {
+          console.log("[ChatKitPanel] Extracting JSON from text, length:", textJoined.length);
+          const jsonObjects = extractJsonFromText(textJoined);
+          console.log("[ChatKitPanel] Extracted", jsonObjects.length, "JSON objects");
           for (const obj of jsonObjects) {
             outputsOnly.push(obj);
           }
           toEmit.outputs = outputsOnly;
         }
 
+        console.log("[ChatKitPanel] Emitting result:", {
+          outputCount: toEmit.outputs.length,
+          textLength: toEmit.text?.length ?? 0,
+          textPreview: toEmit.text?.substring(0, 200),
+        });
+
         try {
           (onResponseJSON ?? (() => {}))(toEmit);
         } catch {
           // ignore errors from consumer code
         }
-      };
-
-      if (!textJoined && outputsOnly.length === 0) {
-        // No text was captured from streaming — use DOM extraction after render
-        requestAnimationFrame(() => {
-          setTimeout(() => {
-            const domText = extractTextFromDOM();
-            if (domText.trim()) {
-              textJoined = domText.trim();
-            }
-            emitResult(textJoined);
-          }, 300);
-        });
-      } else {
-        emitResult(textJoined);
-      }
+      }, 800);
     },
     onThreadChange: () => {
       processedFacts.current.clear();
