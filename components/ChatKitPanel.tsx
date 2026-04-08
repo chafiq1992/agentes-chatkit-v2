@@ -135,6 +135,8 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
   const fetchInterceptBufferRef = useRef<string[]>([]);
   // Track already-processed message IDs to avoid duplicate emissions
   const processedMessageIdsRef = useRef(new Set<string>());
+  // Track the last DOM text snapshot so we can diff to find new content
+  const lastDomSnapshotRef = useRef<string>("");
   // Thread ID captured from ChatKit events for backend message fetching
   const threadIdRef = useRef<string | null>(null);
 
@@ -582,6 +584,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
 
   const handleResetChat = useCallback(() => {
     processedFacts.current.clear();
+    lastDomSnapshotRef.current = "";
     if (isBrowser) {
       setScriptStatus(
         window.customElements?.get("openai-chatkit") ? "ready" : "pending"
@@ -862,7 +865,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
       const textFromFetch = (fetchInterceptBufferRef.current.join("") || "").trim();
       const textJoined = textFromFetch.length > textFromBuffer.length ? textFromFetch : textFromBuffer;
 
-      // If we have text, try to extract JSON and emit immediately
+      // If we have text from streaming events, use it
       if (textJoined || outputsOnly.length > 0) {
         if (outputsOnly.length === 0 && textJoined) {
           const jsonObjects = extractJsonFromText(textJoined);
@@ -879,87 +882,72 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
         return;
       }
 
-      // FALLBACK: No text captured from client-side events.
-      // This happens because ChatKit makes API calls from inside a cross-origin iframe.
-      // Extract thread_id from the collected log events and fetch messages from our backend.
-      let threadId = threadIdRef.current;
+      // ═══════════════════════════════════════════════════════
+      // PRIMARY FALLBACK: Scrape text directly from the ChatKit widget DOM.
+      // ChatKit runs in a cross-origin context so we can't intercept its
+      // fetch calls or get text from onLog events. But the rendered text
+      // is in our DOM (the <openai-chatkit> web component with a shadow root).
+      // We grab ALL text visible in the widget and diff against what we've
+      // previously seen to find only the new assistant response text.
+      // ═══════════════════════════════════════════════════════
 
-      // Try to extract thread_id from the log payloads
-      if (!threadId) {
-        for (const logEntry of payload) {
-          const entry = logEntry as Record<string, unknown>;
-          const data = (entry.data ?? entry) as Record<string, unknown>;
-          // Check various places where thread_id might appear
-          const candidates = [
-            data.thread_id,
-            data.threadId,
-            (data.thread as Record<string, unknown>)?.id,
-            (data.item as Record<string, unknown>)?.thread_id,
-            (data.body as Record<string, unknown>)?.thread_id,
-          ];
-          for (const c of candidates) {
-            if (isThreadId(c)) {
-              threadId = c;
-              threadIdRef.current = c;
-              break;
-            }
-          }
-          if (threadId) break;
-        }
-      }
-
-      if (threadId) {
-        console.log("[ChatKitPanel] Fetching messages from backend for thread:", threadId);
-        // Fetch ALL assistant messages from our backend API
-        fetch(`/api/thread-messages?thread_id=${encodeURIComponent(threadId)}`)
-          .then((r) => r.json())
-          .then((data: { messages?: Array<{ id: string; text: string }> }) => {
-            if (data.messages && data.messages.length > 0) {
-              // Filter out already-processed messages
-              const newMessages = data.messages.filter(
-                (msg) => msg.text?.trim() && !processedMessageIdsRef.current.has(msg.id)
-              );
-
-              console.log(`[ChatKitPanel] Got ${data.messages.length} messages, ${newMessages.length} new`);
-
-              if (newMessages.length === 0) {
-                // All messages already processed — emit empty
-                try { (onResponseJSON ?? (() => {}))({ outputs: [], full: payload, text: undefined }); } catch {}
-                return;
-              }
-
-              // Mark messages as processed
-              for (const msg of newMessages) {
-                processedMessageIdsRef.current.add(msg.id);
-              }
-
-              // Emit each message as a separate response payload
-              for (const msg of newMessages) {
-                const msgText = msg.text.trim();
-                const jsonObjects = extractJsonFromText(msgText);
-                console.log(`[ChatKitPanel] Message ${msg.id}: text length=${msgText.length}, JSON objects=${jsonObjects.length}`);
-
-                const msgOutputs = [...jsonObjects];
-                const toEmit = { outputs: msgOutputs, full: payload, text: msgText };
-                lastCapturedOutputsRef.current = msgOutputs;
-                lastCapturedFullRef.current = payload;
-                lastCapturedTextRef.current = msgText;
-                try { (onResponseJSON ?? (() => {}))(toEmit); } catch {}
-              }
-            } else {
-              console.warn("[ChatKitPanel] No messages returned from backend");
-              try { (onResponseJSON ?? (() => {}))({ outputs: [], full: payload, text: undefined }); } catch {}
-            }
-          })
-          .catch((err) => {
-            console.error("[ChatKitPanel] Backend fetch failed:", err);
+      // Small delay to ensure DOM has finished rendering the last tokens
+      setTimeout(() => {
+        try {
+          const container = widgetContainerRef.current;
+          if (!container) {
+            console.warn("[ChatKitPanel] No widget container ref");
             try { (onResponseJSON ?? (() => {}))({ outputs: [], full: payload, text: undefined }); } catch {}
-          });
-      } else {
-        console.warn("[ChatKitPanel] No thread_id found in log events, cannot fetch messages");
-        // Emit empty result
-        try { (onResponseJSON ?? (() => {}))({ outputs: [], full: payload, text: undefined }); } catch {}
-      }
+            return;
+          }
+
+          // Get all text from the widget
+          const fullDomText = (container.textContent ?? "").trim();
+          console.log("[ChatKitPanel:DOM] Full widget text length:", fullDomText.length);
+
+          if (!fullDomText) {
+            try { (onResponseJSON ?? (() => {}))({ outputs: [], full: payload, text: undefined }); } catch {}
+            return;
+          }
+
+          // Find the new text that appeared since last capture
+          const previousText = lastDomSnapshotRef.current;
+          lastDomSnapshotRef.current = fullDomText;
+
+          let newText = fullDomText;
+          if (previousText && fullDomText.startsWith(previousText)) {
+            // DOM text grows monotonically — the new part is the suffix
+            newText = fullDomText.slice(previousText.length).trim();
+          } else if (previousText && fullDomText.includes(previousText)) {
+            // Previous text is somewhere inside — get everything after it
+            const idx = fullDomText.lastIndexOf(previousText);
+            newText = fullDomText.slice(idx + previousText.length).trim();
+          }
+          // If no previous text or can't find it, use the full text
+          // (this happens on the first response)
+
+          console.log("[ChatKitPanel:DOM] New text length:", newText.length, "preview:", newText.substring(0, 200));
+
+          if (!newText) {
+            try { (onResponseJSON ?? (() => {}))({ outputs: [], full: payload, text: undefined }); } catch {}
+            return;
+          }
+
+          // Extract JSON objects from the new text
+          const jsonObjects = extractJsonFromText(newText);
+          console.log("[ChatKitPanel:DOM] Extracted", jsonObjects.length, "JSON objects from DOM text");
+
+          const domOutputs = [...jsonObjects];
+          const toEmit = { outputs: domOutputs, full: payload, text: newText };
+          lastCapturedOutputsRef.current = domOutputs;
+          lastCapturedFullRef.current = payload;
+          lastCapturedTextRef.current = newText;
+          try { (onResponseJSON ?? (() => {}))(toEmit); } catch {}
+        } catch (e) {
+          console.error("[ChatKitPanel:DOM] Scraping failed:", e);
+          try { (onResponseJSON ?? (() => {}))({ outputs: [], full: payload, text: undefined }); } catch {}
+        }
+      }, 500); // 500ms delay for DOM to settle
     },
     onThreadChange: (threadInfo: unknown) => {
       processedFacts.current.clear();
@@ -970,8 +958,9 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
                     (threadInfo as Record<string, unknown>).threadId;
         if (isThreadId(tid)) {
           threadIdRef.current = tid;
-          // Reset processed messages when thread changes
+          // Reset processed messages and DOM snapshot when thread changes
           processedMessageIdsRef.current.clear();
+          lastDomSnapshotRef.current = "";
           console.log("[ChatKitPanel] Thread ID captured from onThreadChange:", tid);
         }
       }
