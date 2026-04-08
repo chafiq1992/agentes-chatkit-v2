@@ -958,129 +958,15 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
     onResponseEnd: () => {
       onResponseEnd();
       collectingLogsRef.current = false;
-      const payload = responseLogsRef.current;
+      // NOTE: We intentionally do NOT emit any auto-captured text here.
+      // ChatKit renders inside a cross-origin iframe within a shadow DOM,
+      // making it impossible to read the actual chat text from JavaScript.
+      // Users should use the "Paste Output" button in the Output Panel instead.
       responseLogsRef.current = [];
-      const jsonOutputs = jsonCandidatesRef.current;
       jsonCandidatesRef.current = [];
-      const outputsOnly = Array.isArray(jsonOutputs)
-        ? jsonOutputs.filter((o) => o && typeof o === "object" && !Array.isArray(o))
-        : [];
-
-      // Attempt to parse any accumulated JSON text if present (streamed deltas)
-      const jsonJoined = (jsonTextBufferRef.current.join("") || "").trim();
-      if (jsonJoined) {
-        try {
-          const parsed = JSON.parse(jsonJoined);
-          if (parsed && typeof parsed === "object") {
-            outputsOnly.push(parsed);
-          }
-        } catch {}
-      }
-
-      // Check if we got ANY text from the streaming events
-      const textFromBuffer = (textBufferRef.current.join("") || "").trim();
-      const textFromFetch = (fetchInterceptBufferRef.current.join("") || "").trim();
-      const textJoined = textFromFetch.length > textFromBuffer.length ? textFromFetch : textFromBuffer;
-
-      // If we have text from streaming events, use it
-      if (textJoined || outputsOnly.length > 0) {
-        if (outputsOnly.length === 0 && textJoined) {
-          const jsonObjects = extractJsonFromText(textJoined);
-          for (const obj of jsonObjects) {
-            outputsOnly.push(obj);
-          }
-        }
-
-        const toEmit = { outputs: outputsOnly, full: payload, text: textJoined || undefined };
-        lastCapturedOutputsRef.current = outputsOnly;
-        lastCapturedFullRef.current = payload;
-        lastCapturedTextRef.current = textJoined;
-        try { (onResponseJSON ?? (() => {}))(toEmit); } catch {}
-        return;
-      }
-
-      // ═══════════════════════════════════════════════════════
-      // PRIMARY FALLBACK: Scrape text directly from the ChatKit widget DOM.
-      // ChatKit runs in a cross-origin context so we can't intercept its
-      // fetch calls or get text from onLog events. But the rendered text
-      // is in our DOM (the <openai-chatkit> web component with a shadow root).
-      // We grab ALL text visible in the widget and diff against what we've
-      // previously seen to find only the new assistant response text.
-      // ═══════════════════════════════════════════════════════
-
-      // Small delay to ensure DOM has finished rendering the last tokens
-      setTimeout(() => {
-        try {
-          const container = widgetContainerRef.current;
-          if (!container) {
-            console.warn("[ChatKitPanel] No widget container ref");
-            try { (onResponseJSON ?? (() => {}))({ outputs: [], full: payload, text: undefined }); } catch {}
-            return;
-          }
-
-          // Use comprehensive extraction that tries every method
-          const fullDomText = extractAllTextFromWidget(container);
-          console.log("[ChatKitPanel:DOM] Extracted text length:", fullDomText.length);
-
-          if (!fullDomText) {
-            console.warn("[ChatKitPanel:DOM] No text could be extracted from widget!");
-            try { (onResponseJSON ?? (() => {}))({ outputs: [], full: payload, text: undefined }); } catch {}
-            return;
-          }
-
-          // Find the new text that appeared since last capture
-          const previousText = lastDomSnapshotRef.current;
-          lastDomSnapshotRef.current = fullDomText;
-
-          let newText = fullDomText;
-          if (previousText && previousText.length > 0) {
-            if (fullDomText.length > previousText.length) {
-              // Text grew — try to find the new part
-              // Strategy 1: suffix after previous text
-              if (fullDomText.startsWith(previousText)) {
-                newText = fullDomText.slice(previousText.length).trim();
-              }
-              // Strategy 2: find the longest common prefix
-              else {
-                let commonLen = 0;
-                const minLen = Math.min(fullDomText.length, previousText.length);
-                for (let i = 0; i < minLen; i++) {
-                  if (fullDomText[i] === previousText[i]) commonLen++;
-                  else break;
-                }
-                if (commonLen > previousText.length * 0.5) {
-                  newText = fullDomText.slice(commonLen).trim();
-                }
-              }
-            }
-          }
-
-          console.log("[ChatKitPanel:DOM] New text length:", newText.length);
-          if (newText.length > 0) {
-            console.log("[ChatKitPanel:DOM] Preview:", newText.substring(0, 300));
-          }
-
-          if (!newText) {
-            try { (onResponseJSON ?? (() => {}))({ outputs: [], full: payload, text: undefined }); } catch {}
-            return;
-          }
-
-          // Extract JSON objects from the new text
-          const jsonObjects = extractJsonFromText(newText);
-          console.log("[ChatKitPanel:DOM] Extracted", jsonObjects.length, "JSON objects");
-
-          // Always emit — even if no JSON found, emit as plain text so user can copy
-          const domOutputs = [...jsonObjects];
-          const toEmit = { outputs: domOutputs, full: payload, text: newText };
-          lastCapturedOutputsRef.current = domOutputs;
-          lastCapturedFullRef.current = payload;
-          lastCapturedTextRef.current = newText;
-          try { (onResponseJSON ?? (() => {}))(toEmit); } catch {}
-        } catch (e) {
-          console.error("[ChatKitPanel:DOM] Scraping failed:", e);
-          try { (onResponseJSON ?? (() => {}))({ outputs: [], full: payload, text: undefined }); } catch {}
-        }
-      }, 800); // 800ms delay for DOM to fully settle
+      textBufferRef.current = [];
+      jsonTextBufferRef.current = [];
+      fetchInterceptBufferRef.current = [];
     },
     onThreadChange: (threadInfo: unknown) => {
       processedFacts.current.clear();

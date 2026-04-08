@@ -168,6 +168,16 @@ export type ImagePromptsData = {
   prompts: ImagePrompt[];
 };
 
+export type MarketingAngle = {
+  angle_title: string;
+  headlines: string[];
+  ad_copies: string[];
+};
+
+export type MarketingAnglesData = {
+  angles: MarketingAngle[];
+};
+
 /* ────────────────────────────────────────────────────── */
 /* Parsed Output Union                                     */
 /* ────────────────────────────────────────────────────── */
@@ -176,6 +186,7 @@ export type ParsedSection =
   | { type: "product_analysis"; data: ProductAnalysis }
   | { type: "landing_page"; data: LandingPageData }
   | { type: "image_prompts"; data: ImagePromptsData }
+  | { type: "marketing_angles"; data: MarketingAnglesData }
   | { type: "unknown_json"; data: Record<string, unknown> }
   | { type: "plain_text"; data: string };
 
@@ -207,6 +218,17 @@ function isImagePrompts(obj: Record<string, unknown>): boolean {
   );
 }
 
+function isMarketingAngles(obj: Record<string, unknown>): boolean {
+  return (
+    "angles" in obj &&
+    Array.isArray(obj.angles) &&
+    obj.angles.length > 0 &&
+    typeof (obj.angles[0] as Record<string, unknown>)?.angle_title === "string" &&
+    (Array.isArray((obj.angles[0] as Record<string, unknown>)?.headlines) ||
+     Array.isArray((obj.angles[0] as Record<string, unknown>)?.ad_copies))
+  );
+}
+
 function classifyObject(obj: Record<string, unknown>): ParsedSection {
   if (isProductAnalysis(obj)) {
     return { type: "product_analysis", data: obj as unknown as ProductAnalysis };
@@ -216,6 +238,9 @@ function classifyObject(obj: Record<string, unknown>): ParsedSection {
   }
   if (isImagePrompts(obj)) {
     return { type: "image_prompts", data: obj as unknown as ImagePromptsData };
+  }
+  if (isMarketingAngles(obj)) {
+    return { type: "marketing_angles", data: obj as unknown as MarketingAnglesData };
   }
   return { type: "unknown_json", data: obj };
 }
@@ -517,9 +542,33 @@ export function formatSectionForCopy(section: ParsedSection): string {
       return formatLandingPageForCopy(section.data);
     case "image_prompts":
       return formatImagePromptsForCopy(section.data);
+    case "marketing_angles": {
+      const lines: string[] = [];
+      for (const angle of section.data.angles ?? []) {
+        lines.push(`## ${angle.angle_title}`);
+        lines.push("");
+        if (angle.headlines?.length) {
+          lines.push("Headlines:");
+          for (const h of angle.headlines) lines.push(`• ${h}`);
+          lines.push("");
+        }
+        if (angle.ad_copies?.length) {
+          lines.push("Ad Copy:");
+          for (const a of angle.ad_copies) {
+            lines.push(a);
+            lines.push("");
+          }
+        }
+        lines.push("---");
+        lines.push("");
+      }
+      return lines.join("\n");
+    }
     case "plain_text":
       return section.data;
     case "unknown_json":
       return JSON.stringify(section.data, null, 2);
+    default:
+      return "";
   }
 }

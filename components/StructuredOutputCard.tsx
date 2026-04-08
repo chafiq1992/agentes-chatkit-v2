@@ -6,6 +6,7 @@ import {
   type ProductAnalysis,
   type LandingPageData,
   type ImagePromptsData,
+  type MarketingAnglesData,
   formatSectionForCopy,
 } from "@/lib/parseAgentOutput";
 
@@ -752,6 +753,108 @@ function PlainTextCard({ data }: { data: string }) {
 }
 
 /* ────────────────────────────────────────────────────── */
+/* MARKETING ANGLES RENDERER                               */
+/* ────────────────────────────────────────────────────── */
+
+function MarketingAnglesCard({ data }: { data: MarketingAnglesData }) {
+  return (
+    <div className="space-y-3">
+      <div className="output-section">
+        <SectionHeader icon="cta" title={`Marketing Angles (${data.angles?.length || 0})`} />
+      </div>
+
+      {data.angles?.map((angle, i) => (
+        <CollapsibleSection
+          key={i}
+          icon="selling_points"
+          title={angle.angle_title}
+          copyContent={[
+            `Angle: ${angle.angle_title}`,
+            "",
+            "Headlines:",
+            ...(angle.headlines?.map((h) => `• ${h}`) ?? []),
+            "",
+            "Ad Copy:",
+            ...(angle.ad_copies?.map((a, idx) => `[${idx + 1}] ${a}`) ?? []),
+          ].join("\n")}
+        >
+          {/* Headlines */}
+          {angle.headlines?.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "var(--muted)",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
+                  marginBottom: 6,
+                }}
+              >
+                Headlines ({angle.headlines.length})
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {angle.headlines.map((h, j) => (
+                  <span
+                    key={j}
+                    className="tag"
+                    style={{
+                      fontSize: 12,
+                      padding: "4px 10px",
+                      lineHeight: 1.4,
+                    }}
+                  >
+                    {h}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Ad Copies */}
+          {angle.ad_copies?.length > 0 && (
+            <div>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "var(--muted)",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
+                  marginBottom: 6,
+                }}
+              >
+                Ad Copy ({angle.ad_copies.length})
+              </div>
+              <div className="space-y-2">
+                {angle.ad_copies.map((copy, j) => (
+                  <div
+                    key={j}
+                    className="pair-card"
+                    style={{ borderLeft: "3px solid var(--accent)" }}
+                  >
+                    <div
+                      className="pair-card-value"
+                      style={{
+                        fontSize: 13,
+                        lineHeight: 1.7,
+                        whiteSpace: "pre-wrap",
+                      }}
+                    >
+                      {copy}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </CollapsibleSection>
+      ))}
+    </div>
+  );
+}
+
+/* ────────────────────────────────────────────────────── */
 /* MAIN CARD — renders a single ParsedSection              */
 /* ────────────────────────────────────────────────────── */
 
@@ -763,6 +866,8 @@ function SectionRenderer({ section }: { section: ParsedSection }) {
       return <LandingPageCard data={section.data} />;
     case "image_prompts":
       return <ImagePromptsCard data={section.data} />;
+    case "marketing_angles":
+      return <MarketingAnglesCard data={section.data} />;
     case "unknown_json":
       return <UnknownJsonCard data={section.data} />;
     case "plain_text":
@@ -780,6 +885,7 @@ const TYPE_TITLES: Record<ParsedSection["type"], string> = {
   product_analysis: "Product Analysis",
   landing_page: "Landing Page Copy",
   image_prompts: "Image Prompts",
+  marketing_angles: "Marketing Angles",
   unknown_json: "Structured Output",
   plain_text: "Response",
 };
@@ -788,6 +894,7 @@ const TYPE_GRADIENTS: Record<ParsedSection["type"], string> = {
   product_analysis: "linear-gradient(135deg, var(--accent) 0%, #8b5cf6 100%)",
   landing_page: "linear-gradient(135deg, #10b981 0%, #06b6d4 100%)",
   image_prompts: "linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)",
+  marketing_angles: "linear-gradient(135deg, #ec4899 0%, #8b5cf6 100%)",
   unknown_json: "linear-gradient(135deg, var(--muted) 0%, var(--accent) 100%)",
   plain_text: "linear-gradient(135deg, var(--info) 0%, var(--accent) 100%)",
 };
