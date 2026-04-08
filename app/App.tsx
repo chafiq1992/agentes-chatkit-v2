@@ -220,6 +220,7 @@ export default function App() {
           responses={responses}
           isProcessing={isProcessing}
           onClear={handleClear}
+          onPastedResponse={handleResponseJSON}
           activeWorkflowName={activeWorkflowName}
         />
       </div>

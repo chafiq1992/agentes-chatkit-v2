@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useCallback, useRef } from "react";
 import { parseAgentResponse, type ParsedSection } from "@/lib/parseAgentOutput";
 import {
   StructuredOutputCard,
@@ -10,17 +10,90 @@ import {
 
 type ResponsePayload = { outputs: unknown[]; full: unknown; text?: string };
 
+/**
+ * Extract JSON objects from raw text using brace-matching.
+ * Handles concatenated JSON objects and JSON embedded in other text.
+ */
+function extractJsonFromPastedText(raw: string): Record<string, unknown>[] {
+  const results: Record<string, unknown>[] = [];
+  if (!raw) return results;
+  const cleaned = raw.trim();
+
+  // Try parsing as a single JSON object first
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      results.push(parsed as Record<string, unknown>);
+      return results;
+    }
+  } catch {}
+
+  // Brace-matching to find all top-level JSON objects
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escape = false;
+
+  for (let i = 0; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+
+    if (escape) {
+      escape = false;
+      continue;
+    }
+
+    if (ch === "\\") {
+      escape = true;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (ch === "{") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        const slice = cleaned.slice(start, i + 1);
+        try {
+          const parsed = JSON.parse(slice);
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            results.push(parsed as Record<string, unknown>);
+          }
+        } catch {
+          // not valid JSON
+        }
+        start = -1;
+      }
+    }
+  }
+
+  return results;
+}
+
 export function OutputPanel({
   responses,
   isProcessing,
   onClear,
+  onPastedResponse,
   activeWorkflowName,
 }: {
   responses: ResponsePayload[];
   isProcessing: boolean;
   onClear: () => void;
+  onPastedResponse?: (payload: ResponsePayload) => void;
   activeWorkflowName?: string;
 }) {
+  const [pasteText, setPasteText] = useState("");
+  const [showPasteBox, setShowPasteBox] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
   // Parse all responses into structured sections
   const parsedResponses = useMemo(() => {
     return responses.map((resp) => ({
@@ -31,6 +104,47 @@ export function OutputPanel({
 
   const totalSections = parsedResponses.reduce((sum, r) => sum + r.sections.length, 0);
   const hasContent = parsedResponses.length > 0;
+
+  const handlePasteSubmit = useCallback(() => {
+    if (!pasteText.trim()) return;
+
+    const text = pasteText.trim();
+    const jsonObjects = extractJsonFromPastedText(text);
+
+    const payload: ResponsePayload = {
+      outputs: jsonObjects,
+      full: null,
+      text: text,
+    };
+
+    if (onPastedResponse) {
+      onPastedResponse(payload);
+    }
+
+    setPasteText("");
+    setShowPasteBox(false);
+  }, [pasteText, onPastedResponse]);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    // Get pasted text
+    const text = e.clipboardData.getData("text/plain");
+    if (text && text.trim().length > 50) {
+      // Auto-submit if pasted text is substantial
+      setTimeout(() => {
+        const jsonObjects = extractJsonFromPastedText(text.trim());
+        if (jsonObjects.length > 0 && onPastedResponse) {
+          const payload: ResponsePayload = {
+            outputs: jsonObjects,
+            full: null,
+            text: text.trim(),
+          };
+          onPastedResponse(payload);
+          setPasteText("");
+          setShowPasteBox(false);
+        }
+      }, 100);
+    }
+  }, [onPastedResponse]);
 
   return (
     <div
@@ -77,17 +191,123 @@ export function OutputPanel({
               : activeWorkflowName ? `${activeWorkflowName} — Responses will appear here` : "Responses will appear here"}
           </p>
         </div>
-        {hasContent && (
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <button
             type="button"
-            onClick={onClear}
+            onClick={() => {
+              setShowPasteBox((v) => !v);
+              if (!showPasteBox) {
+                setTimeout(() => textareaRef.current?.focus(), 100);
+              }
+            }}
             className="copy-btn"
-            style={{ fontSize: 12 }}
+            style={{
+              fontSize: 12,
+              background: showPasteBox ? "var(--accent)" : undefined,
+              color: showPasteBox ? "#fff" : undefined,
+            }}
+            title="Paste agent output text from the chat"
           >
-            🗑 Clear all
+            📋 Paste Output
           </button>
-        )}
+          {hasContent && (
+            <button
+              type="button"
+              onClick={onClear}
+              className="copy-btn"
+              style={{ fontSize: 12 }}
+            >
+              🗑 Clear all
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Paste Box */}
+      {showPasteBox && (
+        <div
+          style={{
+            padding: "12px 20px 16px",
+            borderBottom: "1px solid var(--border)",
+            background: "var(--surface-raised, var(--surface))",
+            flexShrink: 0,
+          }}
+          className="animate-slide-up"
+        >
+          <p
+            style={{
+              fontSize: 12,
+              color: "var(--muted)",
+              margin: "0 0 8px",
+              lineHeight: 1.4,
+            }}
+          >
+            Copy the agent&apos;s response from the chat and paste it here. JSON will be auto-detected and parsed.
+          </p>
+          <textarea
+            ref={textareaRef}
+            value={pasteText}
+            onChange={(e) => setPasteText(e.target.value)}
+            onPaste={handlePaste}
+            placeholder="Paste the agent output text here... (Ctrl+V)"
+            style={{
+              width: "100%",
+              minHeight: 80,
+              maxHeight: 200,
+              padding: "10px 12px",
+              borderRadius: 8,
+              border: "1.5px solid var(--border)",
+              background: "var(--background)",
+              color: "var(--foreground)",
+              fontSize: 12,
+              fontFamily: "monospace",
+              resize: "vertical",
+              outline: "none",
+              transition: "border-color 0.2s",
+            }}
+            onFocus={(e) => {
+              e.target.style.borderColor = "var(--accent)";
+            }}
+            onBlur={(e) => {
+              e.target.style.borderColor = "var(--border)";
+            }}
+          />
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: 8,
+              marginTop: 8,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setPasteText("");
+                setShowPasteBox(false);
+              }}
+              className="copy-btn"
+              style={{ fontSize: 12 }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handlePasteSubmit}
+              className="copy-btn"
+              style={{
+                fontSize: 12,
+                background: pasteText.trim() ? "var(--accent)" : undefined,
+                color: pasteText.trim() ? "#fff" : undefined,
+                opacity: pasteText.trim() ? 1 : 0.5,
+              }}
+              disabled={!pasteText.trim()}
+            >
+              ✨ Parse & Display
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Scrollable Content */}
       <div
@@ -227,7 +447,7 @@ export function OutputPanel({
                   lineHeight: 1.6,
                 }}
               >
-                Send an image or message in the chat to get started. The agent will analyze it and display structured output here.
+                Send a message in the chat, then click <strong>&quot;📋 Paste Output&quot;</strong> above to copy the agent&apos;s response and parse it here.
               </p>
             </div>
           </div>
