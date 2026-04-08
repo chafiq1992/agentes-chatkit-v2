@@ -3,8 +3,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AgentKit demo",
-  description: "Demo of ChatKit with hosted workflow",
+  title: "Agents ChatKit — Product Analysis Platform",
+  description: "AI-powered product analysis and landing page copy generation tool for e-commerce teams",
 };
 
 export default function RootLayout({
@@ -15,6 +15,8 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <Script
           src="https://cdn.platform.openai.com/deployments/chatkit/chatkit.js"
           strategy="beforeInteractive"

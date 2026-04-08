@@ -23,6 +23,7 @@ export type ChatKitPanelProps = {
   theme: ColorScheme;
   onWidgetAction: (action: FactAction) => Promise<void>;
   onResponseEnd: () => void;
+  onResponseStart?: () => void;
   onThemeRequest: (scheme: ColorScheme) => void;
   onResponseJSON?: (payload: { outputs: unknown[]; full: unknown; text?: string }) => void;
   workflowId?: string;
@@ -54,6 +55,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
     theme,
     onWidgetAction,
     onResponseEnd,
+    onResponseStart,
     onThemeRequest,
     onResponseJSON,
     workflowId,
@@ -159,7 +161,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
         jsonTextBufferRef.current.push(deltaJson);
       }
 
-      // ChatKit Responses API style streaming entries may use { type: "response.output_text.delta", delta }
+      // ChatKit Responses API style streaming entries
       const typeField = (data as { type?: unknown }).type;
       if (typeField === "response.output_text.delta") {
         const d = (data as { delta?: unknown }).delta;
@@ -171,6 +173,58 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
         const jd = (data as { delta?: unknown }).delta;
         if (typeof jd === "string") {
           jsonTextBufferRef.current.push(jd);
+        }
+      }
+
+      // Capture completed text from thread.message.completed or response.output_text.done events
+      if (typeField === "response.output_text.done" || typeField === "response.text.done") {
+        const completedText = (data as { text?: unknown }).text;
+        if (typeof completedText === "string" && completedText.trim()) {
+          textBufferRef.current = [completedText];
+        }
+      }
+
+      if (typeField === "response.completed" || typeField === "thread.message.completed") {
+        // Try to extract the final assembled text
+        const output = (data as { output?: unknown[] }).output;
+        if (Array.isArray(output)) {
+          for (const item of output) {
+            if (item && typeof item === "object") {
+              const txtArr = (item as Record<string, unknown>).text;
+              if (typeof txtArr === "string" && txtArr.trim()) {
+                textBufferRef.current = [txtArr];
+              }
+              const content2 = (item as Record<string, unknown>).content;
+              if (Array.isArray(content2)) {
+                for (const ci of content2) {
+                  if (ci && typeof ci === "object") {
+                    const t = (ci as Record<string, unknown>).text;
+                    if (typeof t === "string" && t.trim()) {
+                      textBufferRef.current = [t];
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        // Also check for message content
+        const message = (data as { message?: unknown }).message;
+        if (message && typeof message === "object") {
+          const msgContent = (message as Record<string, unknown>).content;
+          if (Array.isArray(msgContent)) {
+            for (const ci of msgContent) {
+              if (ci && typeof ci === "object") {
+                const t = (ci as Record<string, unknown>).text;
+                const v = (ci as { text?: { value?: string } }).text;
+                if (typeof t === "string" && t.trim()) {
+                  textBufferRef.current = [t];
+                } else if (typeof v === "object" && typeof v?.value === "string" && v.value.trim()) {
+                  textBufferRef.current = [v.value];
+                }
+              }
+            }
+          }
         }
       }
 
@@ -500,6 +554,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
       jsonCandidatesRef.current = [];
       textBufferRef.current = [];
       jsonTextBufferRef.current = [];
+      try { (onResponseStart ?? (() => {}))(); } catch {}
     },
     onResponseEnd: () => {
       onResponseEnd();
@@ -600,7 +655,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
   }
 
   return (
-    <div className="relative pb-8 flex h-[90vh] w-full rounded-2xl flex-col overflow-hidden bg-white shadow-sm transition-colors dark:bg-slate-900">
+    <div className="relative pb-8 flex h-full w-full rounded-xl flex-col overflow-hidden" style={{ background: "var(--surface)" }}>
       <ChatKit
         key={widgetInstanceKey}
         control={chatkit.control}
