@@ -99,6 +99,123 @@ function extractJsonFromText(raw: string): Record<string, unknown>[] {
   return results;
 }
 
+/**
+ * Try EVERY possible method to extract text from the ChatKit widget.
+ * The widget may use shadow DOM, iframes, or regular DOM. We try them all.
+ * Returns the longest non-empty text found.
+ */
+function extractAllTextFromWidget(container: HTMLElement): string {
+  const attempts: { method: string; text: string }[] = [];
+
+  // Method 1: Direct textContent on container
+  try {
+    const t = (container.textContent ?? "").trim();
+    attempts.push({ method: "container.textContent", text: t });
+  } catch {}
+
+  // Method 2: Direct innerText on container (respects CSS visibility)
+  try {
+    const t = (container.innerText ?? "").trim();
+    attempts.push({ method: "container.innerText", text: t });
+  } catch {}
+
+  // Method 3: Find openai-chatkit web component and access shadow root
+  try {
+    const chatEl = container.querySelector("openai-chatkit");
+    if (chatEl) {
+      const sr = chatEl.shadowRoot;
+      if (sr) {
+        const t1 = (sr.textContent ?? "").trim();
+        attempts.push({ method: "shadowRoot.textContent", text: t1 });
+        // Also try getting innerText from shadow root children
+        const srDiv = sr.querySelector("div");
+        if (srDiv) {
+          const t2 = (srDiv.innerText ?? "").trim();
+          attempts.push({ method: "shadowRoot>div.innerText", text: t2 });
+        }
+      }
+      // Also try the element itself
+      const t3 = ((chatEl as HTMLElement).innerText ?? "").trim();
+      attempts.push({ method: "chatEl.innerText", text: t3 });
+    }
+  } catch {}
+
+  // Method 4: Find any iframes and try to read their content
+  try {
+    const iframes = container.querySelectorAll("iframe");
+    for (let i = 0; i < iframes.length; i++) {
+      try {
+        const doc = iframes[i].contentDocument;
+        if (doc) {
+          const t = (doc.body?.innerText ?? "").trim();
+          attempts.push({ method: `iframe[${i}].innerText`, text: t });
+        }
+      } catch {
+        attempts.push({ method: `iframe[${i}]`, text: "[cross-origin blocked]" });
+      }
+    }
+  } catch {}
+
+  // Method 5: Find all elements with substantial text content
+  try {
+    const allElements = container.querySelectorAll("*");
+    let longestDirectText = "";
+    for (let i = 0; i < allElements.length && i < 500; i++) {
+      const el = allElements[i] as HTMLElement;
+      // Check if this element has direct text content (not from children)
+      const directText = Array.from(el.childNodes)
+        .filter((n) => n.nodeType === Node.TEXT_NODE)
+        .map((n) => (n.textContent ?? "").trim())
+        .filter((t) => t.length > 50)
+        .join(" ");
+      if (directText.length > longestDirectText.length) {
+        longestDirectText = directText;
+      }
+    }
+    if (longestDirectText) {
+      attempts.push({ method: "directTextNodes", text: longestDirectText });
+    }
+  } catch {}
+
+  // Method 6: Look for specific message-like containers
+  try {
+    const selectors = [
+      '[class*="message"]', '[class*="response"]', '[class*="content"]',
+      '[class*="thread"]', '[class*="output"]', '[class*="text"]',
+      '[role="log"]', '[role="main"]', 'article', 'main',
+    ];
+    for (const sel of selectors) {
+      const els = container.querySelectorAll(sel);
+      for (let i = 0; i < els.length; i++) {
+        const t = ((els[i] as HTMLElement).innerText ?? "").trim();
+        if (t.length > 100) {
+          attempts.push({ method: `selector:${sel}[${i}]`, text: t });
+        }
+      }
+    }
+  } catch {}
+
+  // Log all attempts for debugging
+  console.log("[ChatKitPanel:extractText] Attempts:");
+  for (const a of attempts) {
+    const preview = a.text.length > 200 ? a.text.substring(0, 200) + "..." : a.text;
+    console.log(`  ${a.method}: length=${a.text.length} ${preview ? `"${preview}"` : "(empty)"}`);
+  }
+
+  // Return the longest text found (most likely to contain all messages)
+  const best = attempts
+    .filter((a) => a.text.length > 10 && !a.text.startsWith("[cross-origin"))
+    .sort((a, b) => b.text.length - a.text.length)[0];
+
+  if (best) {
+    console.log("[ChatKitPanel:extractText] Best:", best.method, "length:", best.text.length);
+    return best.text;
+  }
+
+  console.warn("[ChatKitPanel:extractText] No text found from any method!");
+  return "";
+}
+
 export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(function ChatKitPanel(
   {
     theme,
@@ -901,11 +1018,12 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
             return;
           }
 
-          // Get all text from the widget
-          const fullDomText = (container.textContent ?? "").trim();
-          console.log("[ChatKitPanel:DOM] Full widget text length:", fullDomText.length);
+          // Use comprehensive extraction that tries every method
+          const fullDomText = extractAllTextFromWidget(container);
+          console.log("[ChatKitPanel:DOM] Extracted text length:", fullDomText.length);
 
           if (!fullDomText) {
+            console.warn("[ChatKitPanel:DOM] No text could be extracted from widget!");
             try { (onResponseJSON ?? (() => {}))({ outputs: [], full: payload, text: undefined }); } catch {}
             return;
           }
@@ -915,18 +1033,32 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
           lastDomSnapshotRef.current = fullDomText;
 
           let newText = fullDomText;
-          if (previousText && fullDomText.startsWith(previousText)) {
-            // DOM text grows monotonically — the new part is the suffix
-            newText = fullDomText.slice(previousText.length).trim();
-          } else if (previousText && fullDomText.includes(previousText)) {
-            // Previous text is somewhere inside — get everything after it
-            const idx = fullDomText.lastIndexOf(previousText);
-            newText = fullDomText.slice(idx + previousText.length).trim();
+          if (previousText && previousText.length > 0) {
+            if (fullDomText.length > previousText.length) {
+              // Text grew — try to find the new part
+              // Strategy 1: suffix after previous text
+              if (fullDomText.startsWith(previousText)) {
+                newText = fullDomText.slice(previousText.length).trim();
+              }
+              // Strategy 2: find the longest common prefix
+              else {
+                let commonLen = 0;
+                const minLen = Math.min(fullDomText.length, previousText.length);
+                for (let i = 0; i < minLen; i++) {
+                  if (fullDomText[i] === previousText[i]) commonLen++;
+                  else break;
+                }
+                if (commonLen > previousText.length * 0.5) {
+                  newText = fullDomText.slice(commonLen).trim();
+                }
+              }
+            }
           }
-          // If no previous text or can't find it, use the full text
-          // (this happens on the first response)
 
-          console.log("[ChatKitPanel:DOM] New text length:", newText.length, "preview:", newText.substring(0, 200));
+          console.log("[ChatKitPanel:DOM] New text length:", newText.length);
+          if (newText.length > 0) {
+            console.log("[ChatKitPanel:DOM] Preview:", newText.substring(0, 300));
+          }
 
           if (!newText) {
             try { (onResponseJSON ?? (() => {}))({ outputs: [], full: payload, text: undefined }); } catch {}
@@ -935,8 +1067,9 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
 
           // Extract JSON objects from the new text
           const jsonObjects = extractJsonFromText(newText);
-          console.log("[ChatKitPanel:DOM] Extracted", jsonObjects.length, "JSON objects from DOM text");
+          console.log("[ChatKitPanel:DOM] Extracted", jsonObjects.length, "JSON objects");
 
+          // Always emit — even if no JSON found, emit as plain text so user can copy
           const domOutputs = [...jsonObjects];
           const toEmit = { outputs: domOutputs, full: payload, text: newText };
           lastCapturedOutputsRef.current = domOutputs;
@@ -947,7 +1080,7 @@ export const ChatKitPanel = forwardRef<ChatKitPanelHandle, ChatKitPanelProps>(fu
           console.error("[ChatKitPanel:DOM] Scraping failed:", e);
           try { (onResponseJSON ?? (() => {}))({ outputs: [], full: payload, text: undefined }); } catch {}
         }
-      }, 500); // 500ms delay for DOM to settle
+      }, 800); // 800ms delay for DOM to fully settle
     },
     onThreadChange: (threadInfo: unknown) => {
       processedFacts.current.clear();
