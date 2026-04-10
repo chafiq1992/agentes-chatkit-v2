@@ -7,26 +7,7 @@ export type WorkflowEntry = {
   name: string;
 };
 
-const STORAGE_KEY = "chatkit-workflows";
 const ACTIVE_KEY = "chatkit-active-workflow";
-
-function loadWorkflows(): WorkflowEntry[] {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveWorkflows(entries: WorkflowEntry[]) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
-  } catch {}
-}
 
 function loadActiveId(): string | null {
   if (typeof window === "undefined") return null;
@@ -50,14 +31,8 @@ export function WorkflowSwitcher({
   currentEnvWorkflowId: string;
   onWorkflowChange: (workflowId: string, name: string) => void;
 }) {
-  const [workflows, setWorkflows] = useState<WorkflowEntry[]>(() => {
-    const stored = loadWorkflows();
-    // Ensure the env workflow is in the list
-    if (currentEnvWorkflowId && !stored.find((w) => w.id === currentEnvWorkflowId)) {
-      stored.unshift({ id: currentEnvWorkflowId, name: "Default Agent" });
-    }
-    return stored;
-  });
+  const [workflows, setWorkflows] = useState<WorkflowEntry[]>([]);
+  const [loading, setLoading] = useState(true);
 
   const [activeId, setActiveId] = useState<string>(() => {
     const stored = loadActiveId();
@@ -69,7 +44,50 @@ export function WorkflowSwitcher({
   const [newId, setNewId] = useState("");
   const [newName, setNewName] = useState("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Fetch workflows from API on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/workflows");
+        if (res.ok) {
+          const data = (await res.json()) as { workflows: WorkflowEntry[] };
+          if (!cancelled && Array.isArray(data.workflows)) {
+            let list = data.workflows;
+            // Ensure the env workflow is always in the list
+            if (
+              currentEnvWorkflowId &&
+              !list.find((w) => w.id === currentEnvWorkflowId)
+            ) {
+              list = [
+                { id: currentEnvWorkflowId, name: "Default Agent" },
+                ...list,
+              ];
+            }
+            setWorkflows(list);
+          }
+        }
+      } catch (err) {
+        console.error("[WorkflowSwitcher] Failed to load workflows:", err);
+        // Fallback: just show the env workflow
+        if (!cancelled) {
+          setWorkflows(
+            currentEnvWorkflowId
+              ? [{ id: currentEnvWorkflowId, name: "Default Agent" }]
+              : []
+          );
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentEnvWorkflowId]);
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -81,11 +99,6 @@ export function WorkflowSwitcher({
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, []);
-
-  // Persist workflows
-  useEffect(() => {
-    saveWorkflows(workflows);
-  }, [workflows]);
 
   const activeWorkflow = workflows.find((w) => w.id === activeId);
 
@@ -99,21 +112,41 @@ export function WorkflowSwitcher({
     [onWorkflowChange]
   );
 
-  const handleAdd = useCallback(() => {
+  const handleAdd = useCallback(async () => {
     const trimId = newId.trim();
     const trimName = newName.trim() || `Agent ${workflows.length + 1}`;
     if (!trimId) return;
-    if (workflows.find((w) => w.id === trimId)) {
-      // Already exists — just select it
-      const existing = workflows.find((w) => w.id === trimId)!;
+
+    // If already exists locally, just select it
+    const existing = workflows.find((w) => w.id === trimId);
+    if (existing) {
       handleSelect(existing);
       setIsAdding(false);
       setNewId("");
       setNewName("");
       return;
     }
+
+    setSaving(true);
+    try {
+      const res = await fetch("/api/workflows", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: trimId, name: trimName }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { workflows: WorkflowEntry[] };
+        if (Array.isArray(data.workflows)) {
+          setWorkflows(data.workflows);
+        }
+      }
+    } catch (err) {
+      console.error("[WorkflowSwitcher] Failed to add workflow:", err);
+    } finally {
+      setSaving(false);
+    }
+
     const entry: WorkflowEntry = { id: trimId, name: trimName };
-    setWorkflows((prev) => [...prev, entry]);
     handleSelect(entry);
     setIsAdding(false);
     setNewId("");
@@ -121,23 +154,61 @@ export function WorkflowSwitcher({
   }, [newId, newName, workflows, handleSelect]);
 
   const handleRename = useCallback(
-    (id: string, name: string) => {
+    async (id: string, name: string) => {
+      const trimName = name.trim();
+      if (!trimName) {
+        setIsEditing(null);
+        return;
+      }
+
+      // Optimistic update
       setWorkflows((prev) =>
-        prev.map((w) => (w.id === id ? { ...w, name: name.trim() || w.name } : w))
+        prev.map((w) => (w.id === id ? { ...w, name: trimName } : w))
       );
       setIsEditing(null);
+
+      try {
+        const res = await fetch("/api/workflows", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, name: trimName }),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { workflows: WorkflowEntry[] };
+          if (Array.isArray(data.workflows)) {
+            setWorkflows(data.workflows);
+          }
+        }
+      } catch (err) {
+        console.error("[WorkflowSwitcher] Failed to rename workflow:", err);
+      }
     },
     []
   );
 
   const handleDelete = useCallback(
-    (id: string) => {
-      setWorkflows((prev) => prev.filter((w) => w.id !== id));
-      if (activeId === id) {
-        const remaining = workflows.filter((w) => w.id !== id);
-        if (remaining.length > 0) {
-          handleSelect(remaining[0]);
+    async (id: string) => {
+      // Optimistic update
+      const remaining = workflows.filter((w) => w.id !== id);
+      setWorkflows(remaining);
+      if (activeId === id && remaining.length > 0) {
+        handleSelect(remaining[0]);
+      }
+
+      try {
+        const res = await fetch("/api/workflows", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id }),
+        });
+        if (res.ok) {
+          const data = (await res.json()) as { workflows: WorkflowEntry[] };
+          if (Array.isArray(data.workflows)) {
+            setWorkflows(data.workflows);
+          }
         }
+      } catch (err) {
+        console.error("[WorkflowSwitcher] Failed to delete workflow:", err);
       }
     },
     [activeId, workflows, handleSelect]
@@ -176,7 +247,7 @@ export function WorkflowSwitcher({
           }}
         />
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {activeWorkflow?.name || "No agent selected"}
+          {loading ? "Loading…" : activeWorkflow?.name || "No agent selected"}
         </span>
         <span style={{ fontSize: 9, color: "var(--muted)", flexShrink: 0 }}>
           {dropdownOpen ? "▲" : "▼"}
@@ -232,118 +303,127 @@ export function WorkflowSwitcher({
             </button>
           </div>
 
+          {/* Loading state */}
+          {loading && (
+            <div style={{ padding: "16px 14px", textAlign: "center", fontSize: 12, color: "var(--muted)" }}>
+              Loading workflows…
+            </div>
+          )}
+
           {/* Workflow list */}
-          <div style={{ maxHeight: 240, overflowY: "auto" }} className="custom-scrollbar">
-            {workflows.map((w) => (
-              <div
-                key={w.id}
-                style={{
-                  padding: "8px 14px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  borderBottom: "1px solid var(--border-subtle)",
-                  background: w.id === activeId ? "var(--accent-soft)" : "transparent",
-                  cursor: "pointer",
-                  transition: "background 0.1s ease",
-                }}
-                onClick={() => handleSelect(w)}
-                onMouseEnter={(e) => {
-                  if (w.id !== activeId) e.currentTarget.style.background = "var(--surface-elevated)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.background = w.id === activeId ? "var(--accent-soft)" : "transparent";
-                }}
-              >
-                <span
+          {!loading && (
+            <div style={{ maxHeight: 240, overflowY: "auto" }} className="custom-scrollbar">
+              {workflows.map((w) => (
+                <div
+                  key={w.id}
                   style={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: "50%",
-                    background: w.id === activeId ? "var(--accent)" : "var(--border)",
-                    flexShrink: 0,
+                    padding: "8px 14px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    borderBottom: "1px solid var(--border-subtle)",
+                    background: w.id === activeId ? "var(--accent-soft)" : "transparent",
+                    cursor: "pointer",
+                    transition: "background 0.1s ease",
                   }}
-                />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  {isEditing === w.id ? (
-                    <input
-                      autoFocus
-                      defaultValue={w.name}
-                      onClick={(e) => e.stopPropagation()}
-                      onBlur={(e) => handleRename(w.id, e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleRename(w.id, (e.target as HTMLInputElement).value);
-                        if (e.key === "Escape") setIsEditing(null);
-                      }}
-                      style={{
-                        width: "100%",
-                        fontSize: 12,
-                        fontWeight: 500,
-                        padding: "2px 6px",
-                        borderRadius: 4,
-                        border: "1px solid var(--accent)",
-                        background: "var(--surface)",
-                        color: "var(--foreground)",
-                        outline: "none",
-                      }}
-                    />
-                  ) : (
-                    <>
-                      <div style={{ fontSize: 12, fontWeight: 500, color: "var(--foreground)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {w.name}
-                      </div>
-                      <div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {w.id}
-                      </div>
-                    </>
-                  )}
-                </div>
-                {/* Action buttons */}
-                <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setIsEditing(w.id);
-                    }}
-                    title="Rename"
+                  onClick={() => handleSelect(w)}
+                  onMouseEnter={(e) => {
+                    if (w.id !== activeId) e.currentTarget.style.background = "var(--surface-elevated)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = w.id === activeId ? "var(--accent-soft)" : "transparent";
+                  }}
+                >
+                  <span
                     style={{
-                      fontSize: 11,
-                      padding: "2px 5px",
-                      borderRadius: 4,
-                      border: "none",
-                      background: "none",
-                      color: "var(--muted)",
-                      cursor: "pointer",
+                      width: 6,
+                      height: 6,
+                      borderRadius: "50%",
+                      background: w.id === activeId ? "var(--accent)" : "var(--border)",
+                      flexShrink: 0,
                     }}
-                  >
-                    ✏️
-                  </button>
-                  {workflows.length > 1 && (
+                  />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {isEditing === w.id ? (
+                      <input
+                        autoFocus
+                        defaultValue={w.name}
+                        onClick={(e) => e.stopPropagation()}
+                        onBlur={(e) => handleRename(w.id, e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleRename(w.id, (e.target as HTMLInputElement).value);
+                          if (e.key === "Escape") setIsEditing(null);
+                        }}
+                        style={{
+                          width: "100%",
+                          fontSize: 12,
+                          fontWeight: 500,
+                          padding: "2px 6px",
+                          borderRadius: 4,
+                          border: "1px solid var(--accent)",
+                          background: "var(--surface)",
+                          color: "var(--foreground)",
+                          outline: "none",
+                        }}
+                      />
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 12, fontWeight: 500, color: "var(--foreground)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {w.name}
+                        </div>
+                        <div style={{ fontSize: 10, color: "var(--muted)", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {w.id}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  {/* Action buttons */}
+                  <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        handleDelete(w.id);
+                        setIsEditing(w.id);
                       }}
-                      title="Delete"
+                      title="Rename"
                       style={{
                         fontSize: 11,
                         padding: "2px 5px",
                         borderRadius: 4,
                         border: "none",
                         background: "none",
-                        color: "var(--danger)",
+                        color: "var(--muted)",
                         cursor: "pointer",
                       }}
                     >
-                      🗑
+                      ✏️
                     </button>
-                  )}
+                    {workflows.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDelete(w.id);
+                        }}
+                        title="Delete"
+                        style={{
+                          fontSize: 11,
+                          padding: "2px 5px",
+                          borderRadius: 4,
+                          border: "none",
+                          background: "none",
+                          color: "var(--danger)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        🗑
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
 
           {/* Add new form */}
           {isAdding && (
@@ -411,19 +491,19 @@ export function WorkflowSwitcher({
                 <button
                   type="button"
                   onClick={handleAdd}
-                  disabled={!newId.trim()}
+                  disabled={!newId.trim() || saving}
                   style={{
                     fontSize: 11,
                     fontWeight: 600,
                     padding: "4px 12px",
                     borderRadius: 6,
                     border: "none",
-                    background: newId.trim() ? "var(--accent)" : "var(--border)",
-                    color: newId.trim() ? "#fff" : "var(--muted)",
-                    cursor: newId.trim() ? "pointer" : "not-allowed",
+                    background: newId.trim() && !saving ? "var(--accent)" : "var(--border)",
+                    color: newId.trim() && !saving ? "#fff" : "var(--muted)",
+                    cursor: newId.trim() && !saving ? "pointer" : "not-allowed",
                   }}
                 >
-                  Add & Switch
+                  {saving ? "Saving…" : "Add & Switch"}
                 </button>
               </div>
             </div>
